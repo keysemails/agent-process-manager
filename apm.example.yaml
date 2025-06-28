@@ -1,0 +1,40 @@
+# Agent Process Manager Configuration Example
+
+server:
+  host: "0.0.0.0"
+  port: 7337
+
+storage:
+  database_url: "sqlite:apm.db"
+  log_retention_days: 7
+  max_log_size_mb: 1000
+
+ui:
+  theme: "dark"
+  dashboard_auth: "none"  # none | basic | oauth
+
+# Keyboard shortcuts
+shortcuts:
+  attach_detach: "ctrl+b,d"
+  attach_kill: "ctrl+b,k"
+
+# Custom pattern detection
+patterns:
+  custom:
+    - name: "deployment_url"
+      pattern: "deployed to (https://[^\\s]+)"
+      severity: "info"
+    
+    - name: "docker_port"
+      pattern: "0\\.0\\.0\\.0:(\\d+)->\\d+/tcp"
+      severity: "info"
+    
+    - name: "test_summary"
+      pattern: "(\\d+) tests?, (\\d+) passed"
+      severity: "info"
+
+# Terminal attachment settings
+attach:
+  default_size:
+    rows: 40
+    cols: 120
