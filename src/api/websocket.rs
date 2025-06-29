@@ -8,7 +8,7 @@ use axum::{
     extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Path, Extension},
     response::IntoResponse,
 };
-use futures::{SinkExt, StreamExt};
+// Note: Axum's WebSocket has its own send method, doesn't need SinkExt
 use std::sync::Arc;
 use tracing::{error, info};
 

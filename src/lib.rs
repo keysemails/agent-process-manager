@@ -8,6 +8,9 @@ pub mod config;
 pub mod logs;
 pub mod process;
 
+#[cfg(test)]
+pub mod test_utils;
+
 // Re-export important types
 pub use process::{Process, ProcessConfig, ProcessId, ProcessManager};
 pub use logs::{LogEntry, LogStorage, LogQuery};

@@ -71,6 +71,38 @@ APM consists of:
 - **API**: REST endpoints for programmatic control
 - **Storage**: SQLite database for log persistence
 
+## Testing
+
+The project includes a comprehensive test suite covering unit tests, integration tests, and end-to-end tests.
+
+### Test Categories
+
+- **Unit Tests**: Core logic for process management, log storage, and pattern detection
+- **Integration Tests**: API endpoints and database operations
+- **End-to-End Tests**: CLI commands and full system workflows
+- **Property Tests**: Fuzz testing for pattern detection
+- **Performance Tests**: Benchmarks for critical paths
+
+### Running Tests
+
+```bash
+# Run all tests
+./run_tests.sh
+
+# Run specific test categories
+cargo test --lib                                    # Unit tests only
+cargo test --test process_supervisor_test          # Process management
+cargo test --test log_storage_test                 # Log storage
+cargo test --test log_patterns_test                # Pattern detection
+cargo test --test api_integration_test             # API endpoints
+cargo test --test cli_e2e_test                     # CLI commands
+
+# Run benchmarks
+cargo bench
+```
+
+See `test_summary.md` for detailed test documentation.
+
 ## Development
 
 ```bash
@@ -79,6 +111,16 @@ RUST_LOG=agent_process_manager=debug cargo run -- start
 
 # Run tests
 cargo test
+
+# Run full test suite with all categories
+./run_tests.sh
+
+# Run specific test suites
+cargo test --test process_supervisor_test -- --test-threads=1
+cargo test --test log_storage_test -- --test-threads=1
+cargo test --test log_patterns_test
+cargo test --test api_integration_test -- --test-threads=1
+cargo test --test cli_e2e_test -- --test-threads=1
 
 # Format code
 cargo fmt

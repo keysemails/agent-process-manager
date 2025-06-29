@@ -18,7 +18,7 @@ tokio-util = { version = "0.7", features = ["compat"] }
 
 # Web framework
 axum = { version = "0.7", features = ["ws"] }
-tower = "0.4"
+tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "fs"] }
 
 # Database
@@ -76,3 +76,14 @@ strip-ansi-escapes = "0.2"
 
 [dev-dependencies]
 tempfile = "3.12"
+mockall = "0.13"
+proptest = "1.5"
+criterion = { version = "0.5", features = ["async_tokio"] }
+test-case = "3.3"
+wiremock = "0.6"
+serial_test = "3.1"
+hyper = "1.6"
+
+[[bench]]
+name = "log_processing"
+harness = false

@@ -86,6 +86,14 @@ impl ProcessManager {
             health_monitor,
         }
     }
+    
+    fn clone_for_restart(&self) -> Self {
+        Self {
+            processes: self.processes.clone(),
+            log_sender: self.log_sender.clone(),
+            health_monitor: self.health_monitor.clone(),
+        }
+    }
 
     pub async fn spawn_process(&self, config: ProcessConfig) -> Result<ProcessInfo> {
         let id = ProcessId::new();
@@ -202,6 +210,8 @@ impl ProcessManager {
         process: Arc<RwLock<Process>>,
     ) {
         let log_sender = self.log_sender.clone();
+        let processes = self.processes.clone();
+        let manager_ref = self.clone_for_restart();
         
         tokio::spawn(async move {
             let reader = {
@@ -229,6 +239,8 @@ impl ProcessManager {
             // Use a thread to bridge sync/async gap
             let id_clone = id.clone();
             let process_clone = process.clone();
+            let processes_clone = processes.clone();
+            let manager_for_restart = manager_ref;
             std::thread::spawn(move || {
                 use std::io::{BufRead, BufReader};
                 let mut reader = BufReader::new(reader);
@@ -238,10 +250,46 @@ impl ProcessManager {
                     match reader.read_line(&mut line) {
                         Ok(0) => {
                             // EOF - process has exited
-                            info!("Process {} has exited", id_clone);
+                            info!("Process {} has exited (thread: {:?})", id_clone, std::thread::current().id());
                             let rt = tokio::runtime::Runtime::new().unwrap();
                             rt.block_on(async {
-                                process_clone.write().await.status = ProcessStatus::Stopped;
+                                let mut proc = process_clone.write().await;
+                                let prev_status = proc.status;
+                                proc.status = ProcessStatus::Stopped;
+                                
+                                info!("Process {} status changed from {:?} to Stopped", id_clone, prev_status);
+                                
+                                // Check if we need to restart
+                                if proc.config.restart_policy.enabled && 
+                                   proc.restart_count < proc.config.restart_policy.max_retries {
+                                    let restart_count = proc.restart_count;
+                                    let max_retries = proc.config.restart_policy.max_retries;
+                                    info!("Process {} will restart, current count: {}/{}", id_clone, restart_count, max_retries);
+                                    drop(proc); // Release lock before restart
+                                    
+                                    // Wait for backoff
+                                    let backoff = process_clone.read().await.config.restart_policy.backoff_ms;
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff)).await;
+                                    
+                                    // Attempt restart
+                                    match manager_for_restart.restart_process(&id_clone).await {
+                                        Ok(info) => {
+                                            info!("Process {} restarted successfully, new PID: {:?}, restart count: {}", 
+                                                  id_clone, info.pid, info.restart_count);
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to restart process {}: {}", id_clone, e);
+                                            // Mark as failed if we can't restart
+                                            if let Some(proc_arc) = processes_clone.read().await.get(&id_clone) {
+                                                proc_arc.write().await.status = ProcessStatus::Failed;
+                                            }
+                                        }
+                                    }
+                                } else if proc.config.restart_policy.enabled {
+                                    // Max retries exceeded
+                                    info!("Process {} max retries exceeded, marking as failed", id_clone);
+                                    proc.status = ProcessStatus::Failed;
+                                }
                             });
                             break;
                         }
@@ -278,7 +326,7 @@ impl ProcessManager {
             .num_seconds() as u64;
 
         // Get current health metrics
-        let (cpu_percent, memory_mb) = if let Some(pid) = proc.pid {
+        let (cpu_percent, memory_mb) = if let Some(_pid) = proc.pid {
             if let Some(health) = self.health_monitor.get_health(&proc.id).await {
                 (Some(health.cpu_percent), Some(health.memory_mb))
             } else {
@@ -315,7 +363,7 @@ impl ProcessManager {
                 .num_seconds() as u64;
 
             // Get current health metrics
-            let (cpu_percent, memory_mb) = if let Some(pid) = proc.pid {
+            let (cpu_percent, memory_mb) = if let Some(_pid) = proc.pid {
                 if let Some(health) = self.health_monitor.get_health(&proc.id).await {
                     (Some(health.cpu_percent), Some(health.memory_mb))
                 } else {
@@ -364,18 +412,65 @@ impl ProcessManager {
     pub async fn restart_process(&self, id: &ProcessId) -> Result<ProcessInfo> {
         self.stop_process(id).await?;
         
-        let config = {
+        let (config, old_restart_count) = {
             let processes = self.processes.read().await;
             let process = processes.get(id)
                 .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
             let proc = process.read().await;
-            proc.config.clone()
+            (proc.config.clone(), proc.restart_count)
         };
 
-        // Remove old process
-        self.processes.write().await.remove(id);
+        // Create new process with same ID
+        let process = if config.pty {
+            self.spawn_with_pty(id.clone(), config).await?
+        } else {
+            self.spawn_without_pty(id.clone(), config).await?
+        };
+        
+        // Update restart count
+        let mut process = process;
+        process.restart_count = old_restart_count + 1;
+        
+        // Get initial health metrics if PID is available
+        let (cpu_percent, memory_mb) = if let Some(pid) = process.pid {
+            self.health_monitor.update_health(&id, pid).await;
+            if let Some(health) = self.health_monitor.get_health(&id).await {
+                (Some(health.cpu_percent), Some(health.memory_mb))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+        
+        let info = ProcessInfo {
+            id: id.clone(),
+            name: process.config.name.clone(),
+            command: process.config.command.clone(),
+            args: process.config.args.clone(),
+            status: process.status,
+            pid: process.pid,
+            started_at: process.started_at,
+            uptime_seconds: 0,
+            restart_count: process.restart_count,
+            tags: process.config.tags.clone(),
+            cpu_percent,
+            memory_mb,
+        };
 
-        // Spawn new process with same config
-        self.spawn_process(config).await
+        let process_arc = Arc::new(RwLock::new(process));
+        
+        // Update the existing process in the map
+        self.processes.write().await.insert(id.clone(), process_arc.clone());
+
+        // Start monitoring the process output
+        self.monitor_process_output(id.clone(), process_arc.clone()).await;
+        
+        // Start monitoring process health
+        if let Some(pid) = info.pid {
+            self.start_health_monitoring(id.clone(), pid).await;
+        }
+
+        Ok(info)
     }
 }

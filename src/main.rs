@@ -10,6 +10,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
 #[command(name = "apm")]
+#[command(version = "0.1.0")]
 #[command(about = "Agent Process Manager - AI-native process management", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -74,6 +75,12 @@ enum Commands {
         /// Process name or ID
         name: String,
     },
+    
+    /// Restart a process
+    Restart {
+        /// Process name or ID
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -103,6 +110,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Status => show_status_cli().await,
         Commands::Stop { name } => stop_process_cli(name).await,
+        Commands::Restart { name } => restart_process_cli(name).await,
     }
 }
 
@@ -110,7 +118,7 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
     info!("Starting Agent Process Manager daemon...");
 
     // Load configuration
-    let config = if let Some(path) = config_path {
+    let config = if let Some(_path) = config_path {
         // Load from specific file
         todo!("Load config from file")
     } else {
@@ -163,6 +171,18 @@ async fn start_process_cli(
     // Connect to daemon via HTTP API
     let client = reqwest::Client::new();
     
+    // Check if daemon is running first
+    if client
+        .get("http://localhost:7337/health")
+        .timeout(std::time::Duration::from_secs(1))
+        .send()
+        .await
+        .is_err()
+    {
+        eprintln!("Error: APM daemon is not running. Start it with 'apm start'");
+        std::process::exit(1);
+    }
+    
     let config = agent_process_manager::process::ProcessConfig {
         name: name.clone(),
         command,
@@ -183,7 +203,7 @@ async fn start_process_cli(
 
     if response.status().is_success() {
         let info: serde_json::Value = response.json().await?;
-        println!("Started process '{}' with ID: {}", name, info["data"]["id"]);
+        println!("Spawned process '{}' with ID: {}", name, info["data"]["id"]);
     } else {
         eprintln!("Failed to start process: {}", response.text().await?);
     }
@@ -246,8 +266,8 @@ async fn show_logs_cli(name: String, errors_only: bool, _follow: bool) -> anyhow
     };
     
     let Some(id) = process_id else {
-        eprintln!("Process '{}' not found", name);
-        return Ok(());
+        eprintln!("Error: Process '{}' not found", name);
+        std::process::exit(1);
     };
     
     // Now get the logs
@@ -281,7 +301,7 @@ async fn show_logs_cli(name: String, errors_only: bool, _follow: bool) -> anyhow
     Ok(())
 }
 
-async fn attach_to_process_cli(name: String, read_only: bool) -> anyhow::Result<()> {
+async fn attach_to_process_cli(name: String, _read_only: bool) -> anyhow::Result<()> {
     println!("Attaching to process '{}'...", name);
     println!("Press Ctrl+B, D to detach");
     
@@ -294,16 +314,39 @@ async fn attach_to_process_cli(name: String, read_only: bool) -> anyhow::Result<
 
 async fn show_status_cli() -> anyhow::Result<()> {
     let client = reqwest::Client::new();
-    let response = client
-        .get("http://localhost:7337/api/agent/summary")
+    
+    // Try to connect to the daemon
+    match client
+        .get("http://localhost:7337/health")
+        .timeout(std::time::Duration::from_secs(2))
         .send()
-        .await?;
-
-    if response.status().is_success() {
-        let data: serde_json::Value = response.json().await?;
-        println!("{}", serde_json::to_string_pretty(&data["data"])?);
-    } else {
-        eprintln!("Failed to get status: {}", response.text().await?);
+        .await
+    {
+        Ok(_) => {
+            println!("APM daemon is running on port 7337");
+            
+            // Get additional summary info
+            if let Ok(response) = client
+                .get("http://localhost:7337/api/agent/summary")
+                .send()
+                .await
+            {
+                if response.status().is_success() {
+                    if let Ok(data) = response.json::<serde_json::Value>().await {
+                        if let Some(summary) = data.get("data") {
+                            if let Some(services) = summary.get("services") {
+                                if let Some(obj) = services.as_object() {
+                                    println!("{} services running", obj.len());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            println!("APM daemon is not running");
+        }
     }
 
     Ok(())
@@ -333,8 +376,8 @@ async fn stop_process_cli(name: String) -> anyhow::Result<()> {
     };
     
     let Some(id) = process_id else {
-        eprintln!("Process '{}' not found", name);
-        return Ok(());
+        eprintln!("Error: Process '{}' not found", name);
+        std::process::exit(1);
     };
     
     // Now stop the process
@@ -344,9 +387,52 @@ async fn stop_process_cli(name: String) -> anyhow::Result<()> {
         .await?;
 
     if response.status().is_success() {
-        println!("Process '{}' stopped", name);
+        println!("Stopped process '{}'", name);
     } else {
         eprintln!("Failed to stop process: {}", response.text().await?);
+    }
+
+    Ok(())
+}
+
+async fn restart_process_cli(name: String) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    
+    // First, get the process ID from the name
+    let processes_response = client
+        .get("http://localhost:7337/api/processes")
+        .send()
+        .await?;
+    
+    if !processes_response.status().is_success() {
+        eprintln!("Failed to list processes: {}", processes_response.text().await?);
+        return Ok(());
+    }
+    
+    let processes: serde_json::Value = processes_response.json().await?;
+    let process_id = if let Some(data) = processes["data"].as_array() {
+        data.iter()
+            .find(|p| p["name"].as_str() == Some(&name) || p["id"].as_str() == Some(&name))
+            .and_then(|p| p["id"].as_str())
+    } else {
+        None
+    };
+    
+    let Some(id) = process_id else {
+        eprintln!("Process '{}' not found", name);
+        return Ok(());
+    };
+    
+    // Now restart the process
+    let response = client
+        .post(&format!("http://localhost:7337/api/processes/{}/restart", id))
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        println!("Restarted process '{}'", name);
+    } else {
+        eprintln!("Failed to restart process: {}", response.text().await?);
     }
 
     Ok(())

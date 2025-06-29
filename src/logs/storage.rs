@@ -154,8 +154,11 @@ impl LogStorage {
     }
 
     pub async fn query(&self, query: LogQuery) -> Result<Vec<LogEntry>> {
-        // For raw format, use memory buffer if available
-        if matches!(query.format, LogFormat::Raw) {
+        // For raw format without filters, use memory buffer if available
+        if matches!(query.format, LogFormat::Raw) && 
+           query.level.is_none() && 
+           query.search.is_none() && 
+           query.since.is_none() {
             let buffers = self.raw_buffers.read().await;
             if let Some(buffer) = buffers.get(&query.process_id) {
                 let lines: Vec<_> = buffer.iter()
@@ -166,14 +169,17 @@ impl LogStorage {
                     .collect();
                 
                 let entries: Vec<_> = lines.into_iter().enumerate()
-                    .map(|(i, line)| LogEntry {
-                        id: i as i64,
-                        process_id: query.process_id.clone(),
-                        timestamp: Utc::now(), // Approximate
-                        raw_line: line.clone(),
-                        clean_line: line.clone(),
-                        patterns: vec![],
-                        level: LogLevel::Info,
+                    .map(|(i, line)| {
+                        let clean_line = String::from_utf8_lossy(&strip_ansi_escapes::strip(&line)).to_string();
+                        LogEntry {
+                            id: i as i64,
+                            process_id: query.process_id.clone(),
+                            timestamp: Utc::now(), // Approximate
+                            raw_line: line.clone(),
+                            clean_line: clean_line.clone(),
+                            patterns: vec![],
+                            level: self.determine_level(&clean_line),
+                        }
                     })
                     .collect();
                 
@@ -282,6 +288,38 @@ impl LogStorage {
         }
 
         Ok(summary)
+    }
+    
+    pub async fn get_raw_logs(&self, process_id: &ProcessId, limit: Option<usize>) -> Result<String> {
+        let query = LogQuery {
+            process_id: process_id.clone(),
+            format: LogFormat::Raw,
+            lines: limit,
+            search: None,
+            level: None,
+            since: None,
+        };
+        
+        let logs = self.query(query).await?;
+        let raw_lines: Vec<String> = logs.into_iter()
+            .map(|entry| entry.raw_line)
+            .collect();
+        
+        Ok(raw_lines.join("\n"))
+    }
+    
+    pub async fn clear_logs(&self, process_id: &ProcessId) -> Result<()> {
+        // Clear from database
+        sqlx::query("DELETE FROM logs WHERE process_id = ?")
+            .bind(process_id.to_string())
+            .execute(&self.db)
+            .await?;
+            
+        // Clear from memory buffer
+        let mut buffers = self.raw_buffers.write().await;
+        buffers.remove(process_id);
+        
+        Ok(())
     }
 }
 
