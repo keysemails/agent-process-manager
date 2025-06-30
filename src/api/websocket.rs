@@ -444,7 +444,8 @@ async fn handle_tmux_attach(socket: WebSocket, session_name: String) {
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
                         match parsed["type"].as_str() {
                             Some("resize") => {
-                                // TODO: Implement tmux pane resize if needed
+                                // Tracked in GitHub Issue #10: Implement tmux pane resize for WebSocket terminal
+                                // Implementation pending
                             }
                             _ => {}
                         }

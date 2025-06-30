@@ -1,0 +1,166 @@
+name: 📋 Development Task
+description: Create a development task or improvement for Agent Process Manager
+title: "[Task]: "
+labels: ["type: chore", "status: ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for development tasks, refactoring, maintenance, or general improvements that don't fit the bug/feature categories.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Task Description
+      description: Clearly describe what needs to be done
+      placeholder: Provide a clear description of the task or improvement
+    validations:
+      required: true
+
+  - type: dropdown
+    id: task_type
+    attributes:
+      label: Task Type
+      description: What type of development task is this?
+      options:
+        - Enhancement (improve existing feature)
+        - Refactor (code structure improvement)
+        - Documentation (update docs)
+        - Testing (add/improve tests)
+        - Performance (optimization)
+        - Security (security improvement)
+        - Chore (maintenance task)
+        - Architecture (design improvement)
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Define what constitutes completion of this task
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+        - [ ] Criterion 3
+        - [ ] Tests added/updated
+        - [ ] Documentation updated
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical_notes
+    attributes:
+      label: Technical Implementation Notes
+      description: Any technical details, constraints, or implementation suggestions
+      placeholder: |
+        Technical considerations:
+        - Files/modules to modify: 
+        - Dependencies or external libraries:
+        - Performance implications:
+        - Breaking changes:
+        - Testing approach:
+
+  - type: textarea
+    id: files_affected
+    attributes:
+      label: Files/Components Affected
+      description: List the specific files, modules, or components this task will modify
+      placeholder: |
+        - src/component/file.rs
+        - docs/section.md
+        - tests/test_file.rs
+      render: shell
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Primary Component
+      description: Which component is primarily affected by this task?
+      options:
+        - API (REST endpoints)
+        - CLI (command line interface)
+        - Process Management
+        - Log Storage & Patterns
+        - tmux Integration
+        - WebSocket Streaming
+        - AI Agent API
+        - Configuration
+        - Documentation
+        - Testing
+        - Build/CI
+        - Multiple Components
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How urgent is this task?
+      options:
+        - Low (can wait)
+        - Medium (should be done soon)
+        - High (important for next release)
+        - Critical (urgent)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Estimated Complexity
+      description: How complex is this task to implement?
+      options:
+        - Low (< 1 day)
+        - Medium (1-3 days)
+        - High (1+ weeks)
+        - Unknown
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: requirements
+    attributes:
+      label: Requirements & Dependencies
+      options:
+        - label: This task depends on other issues
+          required: false
+        - label: This task blocks other work
+          required: false
+        - label: Breaking changes required
+          required: false
+        - label: External dependencies needed
+          required: false
+        - label: Documentation updates required
+          required: false
+        - label: Tests need to be added/updated
+          required: false
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies & Blockers
+      description: List any dependencies or blockers for this task
+      placeholder: |
+        Dependencies:
+        - Issue #123 needs to be completed first
+        - External library X needs to be integrated
+        
+        Blockers:
+        - Decision needed on Y
+        - Resource Z not available
+
+  - type: textarea
+    id: definition_of_done
+    attributes:
+      label: Definition of Done
+      description: Specific checklist for when this task is complete
+      placeholder: |
+        This task is complete when:
+        - [ ] Code implemented and tested
+        - [ ] Documentation updated
+        - [ ] Tests pass
+        - [ ] Code review completed
+        - [ ] No breaking changes (or properly documented)
+        - [ ] Performance impact assessed

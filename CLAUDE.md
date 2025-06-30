@@ -364,11 +364,58 @@ tmux kill-session -t apm-<id>
 4. **Human-Friendly**: Full access to raw logs when needed
 5. **Independent Service**: No dependencies on specific AI platforms
 
-## Future Enhancements
+## Task Management and Contributing
 
-- Process groups and dependencies
-- Advanced restart policies
-- Log rotation and archival
-- Distributed APM clustering
-- Plugin system for custom patterns
-- Process communication channels
+### GitHub Issues Workflow
+All development tasks are now tracked through GitHub Issues with a comprehensive labeling system:
+
+**Priority Labels**: `priority: critical/high/medium/low`
+**Component Labels**: `component: api/cli/logs/process/tmux/websocket/ai-agent/config`
+**Status Labels**: `status: needs-research/blocked/ready/in-progress/needs-review`
+**Type Labels**: `type: bug/feature/enhancement/documentation/refactor/chore`
+
+### Finding Work
+- Browse [open issues](https://github.com/sunnya97/agent-process-manager/issues)
+- Filter by component: `label:"component: api"` for API-related tasks
+- Check [`good-first-issue`](https://github.com/sunnya97/agent-process-manager/labels/good-first-issue) for newcomer tasks
+- Look for [`status: ready`](https://github.com/sunnya97/agent-process-manager/labels/status%3A%20ready) issues
+
+### Development Process
+1. **Pick an Issue**: Comment to claim it and ask questions if needed
+2. **Create Branch**: `git checkout -b feature/issue-number-description`
+3. **Implement**: Follow implementation guidelines
+4. **Test**: Ensure all tests pass and add new tests
+5. **Submit PR**: Reference issue number and provide clear description
+
+### Implementation Guidelines
+When implementing features:
+1. Add comprehensive tests (see testing section above)
+2. Update documentation (README.md, CLAUDE.md, inline docs)
+3. Follow existing code patterns and Rust conventions
+4. Consider backwards compatibility
+5. Add feature flags for experimental features
+6. Update issue status labels as you progress
+
+### Useful GitHub CLI Commands
+```bash
+# View issues for a component
+gh issue list --label "component: api"
+
+# View high priority issues
+gh issue list --label "priority: high"
+
+# Create new issue
+gh issue create --template feature_request.yml
+
+# Assign issue to yourself
+gh issue edit 123 --add-assignee @me
+```
+
+## Future Development
+
+Current development priorities are tracked in GitHub Issues. Key areas include:
+- Process groups and dependencies ([Issue #6](https://github.com/sunnya97/agent-process-manager/issues/6))
+- Advanced restart policies ([Issue #3](https://github.com/sunnya97/agent-process-manager/issues/3))
+- Log rotation and archival ([Issue #4](https://github.com/sunnya97/agent-process-manager/issues/4))
+- Enhanced AI Agent API ([Issue #1](https://github.com/sunnya97/agent-process-manager/issues/1))
+- Plugin system for custom patterns ([Issue #9](https://github.com/sunnya97/agent-process-manager/issues/9))

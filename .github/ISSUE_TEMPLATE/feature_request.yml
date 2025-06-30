@@ -1,0 +1,142 @@
+name: ✨ Feature Request
+description: Suggest a new feature or enhancement for Agent Process Manager
+title: "[Feature]: "
+labels: ["type: feature", "status: needs-research"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a new feature! Please provide detailed information about your proposal.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Feature Summary
+      description: A clear and concise description of the feature you'd like to see
+      placeholder: Briefly describe the feature you want
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve? What use case does it address?
+      placeholder: |
+        Is your feature request related to a problem? Please describe.
+        Example: "I'm always frustrated when..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the solution you'd like to see implemented
+      placeholder: |
+        Describe your proposed solution in detail. How should it work?
+        Include any API changes, CLI commands, or UI modifications.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative Solutions
+      description: Have you considered any alternative approaches?
+      placeholder: Describe any alternative solutions or features you've considered
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Usage Examples
+      description: Provide examples of how this feature would be used
+      placeholder: |
+        Show concrete examples of commands, API calls, or workflows:
+        
+        ```bash
+        # Example CLI usage
+        apm new-feature --option value
+        ```
+        
+        ```json
+        // Example API request
+        {
+          "feature": "example"
+        }
+        ```
+      render: shell
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which component would this feature affect?
+      options:
+        - API (REST endpoints)
+        - CLI (command line interface)
+        - Process Management
+        - Log Storage & Patterns
+        - tmux Integration
+        - WebSocket Streaming
+        - AI Agent API
+        - Configuration
+        - Documentation
+        - Multiple Components
+        - New Component
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How important is this feature to you?
+      options:
+        - Low (nice to have)
+        - Medium (would improve workflow)
+        - High (important for adoption)
+        - Critical (blocking usage)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Estimated Complexity
+      description: How complex do you think this feature would be to implement?
+      options:
+        - Low (small change)
+        - Medium (moderate effort)
+        - High (significant development)
+        - Unknown
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: additional
+    attributes:
+      label: Additional Information
+      options:
+        - label: I have searched existing issues for similar feature requests
+          required: true
+        - label: This feature would be backward compatible
+          required: false
+        - label: I am willing to implement this feature
+          required: false
+        - label: This feature requires breaking changes
+          required: false
+        - label: This feature affects security considerations
+          required: false
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation Notes
+      description: Any technical details or implementation suggestions (optional)
+      placeholder: |
+        If you have thoughts on implementation:
+        - Which files/modules would be affected?
+        - Any dependencies or external libraries needed?
+        - Performance considerations?
+        - Testing approach?

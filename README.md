@@ -197,6 +197,26 @@ cargo bench
 
 See `test_summary.md` for detailed test documentation.
 
+## Contributing
+
+We welcome contributions! Agent Process Manager uses GitHub Issues for project management with a comprehensive labeling system.
+
+### Quick Start
+1. **Find an Issue**: Browse [open issues](https://github.com/sunnya97/agent-process-manager/issues) or check [`good-first-issue`](https://github.com/sunnya97/agent-process-manager/labels/good-first-issue) for newcomer-friendly tasks
+2. **Create a Branch**: `git checkout -b feature/issue-number-description`
+3. **Make Changes**: Follow existing code patterns and add tests
+4. **Submit PR**: Reference the issue number and provide clear description
+
+### Issue Management
+- 🐛 **Bug Reports**: Use our [bug report template](https://github.com/sunnya97/agent-process-manager/issues/new?template=bug_report.yml)
+- ✨ **Feature Requests**: Use our [feature request template](https://github.com/sunnya97/agent-process-manager/issues/new?template=feature_request.yml)
+- 📋 **Development Tasks**: General improvements and maintenance
+
+### Priority & Component System
+Issues are organized with priority levels (critical, high, medium, low) and component labels (api, cli, logs, process, tmux, websocket, ai-agent, config) for easy filtering and organization.
+
+For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Development
 
 ```bash

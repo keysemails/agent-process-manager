@@ -1,0 +1,119 @@
+name: 🐛 Bug Report
+description: Report a bug or issue with Agent Process Manager
+title: "[Bug]: "
+labels: ["type: bug", "status: needs-research"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the information below to help us reproduce and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe what happened and what you expected to happen
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Please provide detailed steps to reproduce the issue
+      placeholder: |
+        1. Start APM daemon with `apm start`
+        2. Spawn a process with `apm spawn test-app python -m http.server`
+        3. Run command X
+        4. See error Y
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+      placeholder: Describe the expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+      placeholder: Describe what actually happened, including any error messages
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Information
+      description: Please provide information about your system
+      placeholder: |
+        - OS: [e.g., macOS 14.0, Ubuntu 22.04, Windows 11]
+        - Rust version: [output of `rustc --version`]
+        - APM version: [output of `apm --version` or git commit]
+        - Terminal: [e.g., iTerm2, Windows Terminal, GNOME Terminal]
+        - tmux version: [if applicable, output of `tmux -V`]
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: Please include any relevant log output or error messages
+      placeholder: |
+        ```
+        Paste log output here
+        ```
+      render: shell
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which component of APM is affected?
+      options:
+        - API (REST endpoints)
+        - CLI (command line interface)
+        - Process Management
+        - Log Storage & Patterns
+        - tmux Integration
+        - WebSocket Streaming
+        - AI Agent API
+        - Configuration
+        - Other/Unknown
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How critical is this bug?
+      options:
+        - Low (minor inconvenience)
+        - Medium (affects functionality)
+        - High (blocks important features)
+        - Critical (system unusable)
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: additional
+    attributes:
+      label: Additional Information
+      options:
+        - label: I have searched existing issues for duplicates
+          required: true
+        - label: I have included all relevant log output
+          required: false
+        - label: This bug affects multiple components
+          required: false
+        - label: I am willing to submit a pull request to fix this bug
+          required: false
