@@ -1,17 +1,14 @@
 use agent_process_manager::api::create_router;
-use agent_process_manager::logs::{LogStorage, LogEntry, LogLevel, LogFormat, LogQuery};
+use agent_process_manager::logs::LogStorage;
 use agent_process_manager::process::{ProcessManager, ProcessId, ProcessStatus};
-use agent_process_manager::process::supervisor::{ProcessConfig, RestartPolicy, ResourceLimits};
-use axum::body::Body;
+use agent_process_manager::process::supervisor::ProcessConfig;
+use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use serde_json::{json, Value};
 use serial_test::serial;
 use std::sync::Arc;
-use std::collections::HashMap;
 use tower::ServiceExt;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
-use futures::{StreamExt, SinkExt};
 use tempfile::TempDir;
 
 async fn setup_test_app() -> (axum::Router, Arc<ProcessManager>, Arc<LogStorage>, TempDir) {
@@ -43,7 +40,7 @@ async fn test_health_endpoint() {
     
     assert_eq!(response.status(), StatusCode::OK);
     
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     
     assert_eq!(json["status"], "healthy");
@@ -73,7 +70,7 @@ async fn test_spawn_process_endpoint() {
     
     assert_eq!(response.status(), StatusCode::OK);
     
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let process_info: Value = serde_json::from_slice(&body).unwrap();
     
     assert_eq!(process_info["name"], "test-api-spawn");
@@ -113,7 +110,7 @@ async fn test_list_processes_endpoint() {
     
     assert_eq!(response.status(), StatusCode::OK);
     
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let processes: Vec<Value> = serde_json::from_slice(&body).unwrap();
     
     assert_eq!(processes.len(), 3);
@@ -151,7 +148,7 @@ async fn test_get_process_endpoint() {
     
     assert_eq!(response.status(), StatusCode::OK);
     
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let process_info: Value = serde_json::from_slice(&body).unwrap();
     
     assert_eq!(process_info["id"], info.id.to_string());
@@ -254,7 +251,7 @@ async fn test_get_logs_endpoint() {
     
     assert_eq!(response.status(), StatusCode::OK);
     
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let logs: Vec<Value> = serde_json::from_slice(&body).unwrap();
     
     assert!(!logs.is_empty());
@@ -290,7 +287,7 @@ async fn test_get_logs_with_filters() {
     
     assert_eq!(response.status(), StatusCode::OK);
     
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let logs: Vec<Value> = serde_json::from_slice(&body).unwrap();
     
     // Should have error logs
@@ -324,7 +321,7 @@ async fn test_get_raw_logs_endpoint() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers().get("content-type").unwrap(), "text/plain");
     
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
     
     for line in logs {
@@ -364,7 +361,7 @@ async fn test_process_health_endpoint() {
     
     assert_eq!(response.status(), StatusCode::OK);
     
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let health: Value = serde_json::from_slice(&body).unwrap();
     
     assert!(health["cpu_percent"].is_number());

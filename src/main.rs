@@ -191,6 +191,7 @@ async fn start_process_cli(
         env: std::collections::HashMap::new(),
         tags,
         pty,
+        use_tmux: true, // Use tmux by default
         restart_policy: Default::default(),
         resources: Default::default(),
     };
@@ -301,13 +302,71 @@ async fn show_logs_cli(name: String, errors_only: bool, _follow: bool) -> anyhow
     Ok(())
 }
 
-async fn attach_to_process_cli(name: String, _read_only: bool) -> anyhow::Result<()> {
-    println!("Attaching to process '{}'...", name);
-    println!("Press Ctrl+B, D to detach");
+async fn attach_to_process_cli(name: String, read_only: bool) -> anyhow::Result<()> {
+    use std::process::Command;
     
-    // TODO: Implement WebSocket connection for terminal attachment
-    // This would open a WebSocket to /api/attach/{id}
-    // And bridge it to the local terminal
+    let client = reqwest::Client::new();
+    
+    // First, get the process ID from the name
+    let processes_response = client
+        .get("http://localhost:7337/api/processes")
+        .send()
+        .await?;
+    
+    if !processes_response.status().is_success() {
+        eprintln!("Failed to list processes: {}", processes_response.text().await?);
+        return Ok(());
+    }
+    
+    let processes: serde_json::Value = processes_response.json().await?;
+    let process_info = if let Some(data) = processes["data"].as_array() {
+        data.iter()
+            .find(|p| p["name"].as_str() == Some(&name) || p["id"].as_str() == Some(&name))
+    } else {
+        None
+    };
+    
+    let Some(process) = process_info else {
+        eprintln!("Error: Process '{}' not found", name);
+        std::process::exit(1);
+    };
+    
+    let id = process["id"].as_str().unwrap();
+    let session_name = format!("apm-{}", id);
+    
+    // Check if tmux session exists
+    let check_session = Command::new("tmux")
+        .args(&["has-session", "-t", &session_name])
+        .output()?;
+    
+    if !check_session.status.success() {
+        eprintln!("Error: Process '{}' is not using tmux or session not found", name);
+        std::process::exit(1);
+    }
+    
+    println!("Attaching to process '{}'...", name);
+    println!("Use tmux detach key (Ctrl+B, D by default) to detach");
+    
+    // Use tmux attach command
+    let mut tmux_cmd = Command::new("tmux");
+    
+    if read_only {
+        // For read-only mode, we can use a separate tmux client in read-only mode
+        // This is a bit tricky with tmux, so for now we'll just warn
+        println!("Note: Read-only mode is not fully supported with tmux attachment");
+    }
+    
+    tmux_cmd.args(&["attach-session", "-t", &session_name]);
+    
+    // Execute tmux attach - this will take over the terminal
+    let status = tmux_cmd.status()?;
+    
+    if !status.success() {
+        eprintln!("Failed to attach to tmux session");
+        std::process::exit(1);
+    }
+    
+    println!("\r\nDetached from process '{}'", name);
     
     Ok(())
 }

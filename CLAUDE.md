@@ -21,9 +21,10 @@ Agent Process Manager (APM) is a standalone Rust service designed for AI-native 
 ### Core Components
 
 1. **Process Supervisor** (`src/process/supervisor.rs`)
-   - Manages process lifecycle with PTY support
+   - Manages process lifecycle with tmux integration (default) or PTY support
    - Handles process spawning, monitoring, and termination
    - Integrates with HealthMonitor for resource tracking
+   - Uses tmux sessions for robust terminal management
 
 2. **Log Storage** (`src/logs/storage.rs`)
    - SQLite-based persistence with SQLx
@@ -44,6 +45,12 @@ Agent Process Manager (APM) is a standalone Rust service designed for AI-native 
    - Axum-based REST API
    - WebSocket support for real-time streaming
    - JSON responses with consistent error handling
+
+6. **tmux Integration** (`src/tmux.rs`)
+   - Default backend for process management
+   - Eliminates terminal emulation complexity
+   - Provides native terminal attachment
+   - Enables persistent sessions
 
 ## API Endpoints
 
@@ -77,14 +84,14 @@ apm start                          # Start the daemon
 apm status                         # Check daemon status
 
 # Process Management
-apm spawn <name> <command> [args]  # Start a process
+apm spawn <name> <command> [args]  # Start a process (uses tmux by default)
 apm list                          # List all processes
 apm logs <name>                   # View process logs
 apm stop <name>                   # Stop a process
 apm restart <name>                # Restart a process
 
 # Interactive
-apm attach <name>                 # Attach to process (future)
+apm attach <name>                 # Attach to process (uses tmux attach)
 ```
 
 ## Development Guidelines
@@ -165,14 +172,35 @@ RUST_LOG=agent_process_manager=debug,tower_http=debug ./target/debug/apm start
 
 ### Managing Process Lifecycle
 ```bash
-# Spawn with PTY support (default)
+# Spawn with tmux support (default)
 apm spawn my-app python app.py
+
+# Attach to running process (uses tmux)
+apm attach my-app
+
+# Access tmux session directly
+tmux attach -t apm-<process-id>
 
 # Monitor resources
 curl http://localhost:7337/api/processes/<id>/health
 
 # Get AI-friendly summary
 curl http://localhost:7337/api/agent/summary
+```
+
+### tmux Integration
+```bash
+# List APM tmux sessions
+tmux list-sessions | grep apm-
+
+# Send commands to a process
+tmux send-keys -t apm-<id> "echo hello" Enter
+
+# Capture pane content
+tmux capture-pane -t apm-<id> -p
+
+# Kill orphaned sessions
+tmux kill-session -t apm-<id>
 ```
 
 ## Design Principles

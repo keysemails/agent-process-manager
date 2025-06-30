@@ -7,6 +7,7 @@ pub mod api;
 pub mod config;
 pub mod logs;
 pub mod process;
+pub mod tmux;
 
 #[cfg(test)]
 pub mod test_utils;
@@ -23,6 +24,9 @@ use thiserror::Error;
 pub enum ApmError {
     #[error("Process error: {0}")]
     Process(String),
+    
+    #[error("Process error: {0}")]
+    ProcessError(String),
     
     #[error("Configuration error: {0}")]
     Config(String),

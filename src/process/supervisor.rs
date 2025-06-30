@@ -2,7 +2,7 @@
 
 use super::{ProcessId, ProcessInfo, ProcessStatus};
 use super::health::HealthMonitor;
-use crate::{ApmError, Result};
+use crate::{ApmError, Result, tmux::TmuxManager};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -10,6 +10,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{RwLock, Mutex};
 use tracing::{error, info};
+
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessConfig {
@@ -24,6 +28,8 @@ pub struct ProcessConfig {
     pub tags: Vec<String>,
     #[serde(default)]
     pub pty: bool,
+    #[serde(default = "default_true")]
+    pub use_tmux: bool,
     #[serde(default)]
     pub restart_policy: RestartPolicy,
     #[serde(default)]
@@ -62,6 +68,7 @@ pub struct Process {
     pub pid: Option<u32>,
     pty_master: Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>,
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
+    tmux_session: Option<String>,
 }
 
 pub struct ProcessManager {
@@ -99,7 +106,9 @@ impl ProcessManager {
         let id = ProcessId::new();
         info!("Spawning process '{}' with ID {}", config.name, id);
 
-        let process = if config.pty {
+        let process = if config.use_tmux && TmuxManager::is_available() {
+            self.spawn_with_tmux(id.clone(), config).await?
+        } else if config.pty {
             self.spawn_with_pty(id.clone(), config).await?
         } else {
             self.spawn_without_pty(id.clone(), config).await?
@@ -158,6 +167,129 @@ impl ProcessManager {
         });
     }
 
+    async fn spawn_with_tmux(&self, id: ProcessId, config: ProcessConfig) -> Result<Process> {
+        let session_name = format!("apm-{}", id.0);
+        
+        // Prepare environment variables
+        let env_vars: Vec<(String, String)> = config.env.iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        
+        // Create log file path and pre-create the file
+        let log_path = format!("/tmp/apm-{}.log", id.0);
+        std::fs::File::create(&log_path)
+            .map_err(|e| ApmError::ProcessError(format!("Failed to create log file: {}", e)))?;
+        
+        // Create tmux session with pipe-pane logging
+        TmuxManager::create_session(
+            &session_name,
+            &config.command,
+            &config.args,
+            config.cwd.as_ref().and_then(|p| p.to_str()),
+            &env_vars,
+            Some(&log_path),
+        )?;
+        
+        // Get the PID of the process in tmux
+        let pid = TmuxManager::get_session_pid(&session_name)
+            .ok();
+        
+        // Start log monitoring
+        let log_sender = self.log_sender.clone();
+        let id_clone = id.clone();
+        
+        // Wait for tmux session to be ready
+        let mut retries = 10;
+        while retries > 0 && !TmuxManager::session_exists(&session_name) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            retries -= 1;
+        }
+        
+        if !TmuxManager::session_exists(&session_name) {
+            return Err(ApmError::ProcessError("tmux session failed to start".to_string()));
+        }
+        
+        // Start monitoring the pipe in a separate task using blocking I/O
+        let log_path_clone = log_path.clone();
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            use std::fs::File;
+            
+            info!("Starting log monitor thread for {}", log_path_clone);
+            
+            // Wait for file to be created
+            let mut retries = 40; // 10 seconds total
+            loop {
+                if std::path::Path::new(&log_path_clone).exists() {
+                    break;
+                }
+                if retries == 0 {
+                    error!("Log file {} was not created after 10 seconds", log_path_clone);
+                    return;
+                }
+                retries -= 1;
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            
+            // Open file for reading
+            let file = match File::open(&log_path_clone) {
+                Ok(f) => {
+                    info!("Successfully opened log file {}", log_path_clone);
+                    f
+                },
+                Err(e) => {
+                    error!("Failed to open log file {}: {}", log_path_clone, e);
+                    return;
+                }
+            };
+            
+            let mut reader = BufReader::new(file);
+            let mut line = String::new();
+            
+            loop {
+                match reader.read_line(&mut line) {
+                    Ok(0) => {
+                        // EOF - wait and continue
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        continue;
+                    }
+                    Ok(_) => {
+                        // Send the line
+                        let line_to_send = line.trim_end().to_string();
+                        if !line_to_send.is_empty() {
+                            let rt = tokio::runtime::Runtime::new().unwrap();
+                            if let Err(e) = rt.block_on(async {
+                                log_sender.send((id_clone.clone(), line_to_send)).await
+                            }) {
+                                error!("Failed to send log: {}", e);
+                                break;
+                            }
+                        }
+                        line.clear();
+                    }
+                    Err(e) => {
+                        error!("Error reading log file: {}", e);
+                        break;
+                    }
+                }
+            }
+            
+            info!("Log monitor thread for {} ended", log_path_clone);
+        });
+        
+        Ok(Process {
+            id,
+            config,
+            status: ProcessStatus::Running,
+            started_at: chrono::Utc::now(),
+            restart_count: 0,
+            pid,
+            pty_master: None, // No direct PTY access with tmux
+            child: None, // No direct child process
+            tmux_session: Some(session_name),
+        })
+    }
+
     async fn spawn_with_pty(&self, id: ProcessId, config: ProcessConfig) -> Result<Process> {
         let pty_system = native_pty_system();
         
@@ -195,6 +327,7 @@ impl ProcessManager {
             pid,
             pty_master: Some(Arc::new(Mutex::new(pty_pair.master))),
             child: Some(child),
+            tmux_session: None,
         })
     }
 
@@ -209,6 +342,45 @@ impl ProcessManager {
         id: ProcessId,
         process: Arc<RwLock<Process>>,
     ) {
+        // Check if this is a tmux session
+        let is_tmux = {
+            let proc = process.read().await;
+            proc.tmux_session.is_some()
+        };
+        
+        if is_tmux {
+            // For tmux sessions, monitoring is handled by the pipe-pane setup
+            // We just need to monitor if the session is still alive
+            let session_name = {
+                let proc = process.read().await;
+                proc.tmux_session.clone()
+            };
+            
+            if let Some(session) = session_name {
+                let processes = self.processes.clone();
+                let id_clone = id.clone();
+                
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        
+                        if !TmuxManager::session_exists(&session) {
+                            info!("tmux session {} has ended", session);
+                            
+                            // Update process status
+                            if let Some(proc_arc) = processes.read().await.get(&id_clone) {
+                                let mut proc = proc_arc.write().await;
+                                proc.status = ProcessStatus::Stopped;
+                            }
+                            break;
+                        }
+                    }
+                });
+            }
+            return;
+        }
+        
+        // Original PTY monitoring code
         let log_sender = self.log_sender.clone();
         let processes = self.processes.clone();
         let manager_ref = self.clone_for_restart();
@@ -472,5 +644,43 @@ impl ProcessManager {
         }
 
         Ok(info)
+    }
+
+    pub async fn get_pty_master(
+        &self,
+        id: &ProcessId,
+    ) -> Result<Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>> {
+        let processes = self.processes.read().await;
+        let process = processes.get(id)
+            .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
+        
+        let proc = process.read().await;
+        Ok(proc.pty_master.clone())
+    }
+    
+    pub async fn get_tmux_session(
+        &self,
+        id: &ProcessId,
+    ) -> Result<Option<String>> {
+        let processes = self.processes.read().await;
+        let process = processes.get(id)
+            .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
+        
+        let proc = process.read().await;
+        Ok(proc.tmux_session.clone())
+    }
+    
+    pub async fn cleanup_tmux_sessions(&self) -> Result<()> {
+        let processes = self.processes.read().await;
+        for (id, process) in processes.iter() {
+            let proc = process.read().await;
+            if let Some(session) = &proc.tmux_session {
+                if proc.status == ProcessStatus::Stopped {
+                    info!("Cleaning up tmux session {} for stopped process {}", session, id);
+                    let _ = TmuxManager::kill_session(session);
+                }
+            }
+        }
+        Ok(())
     }
 }
