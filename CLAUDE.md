@@ -10,8 +10,10 @@ Agent Process Manager (APM) is a standalone Rust service designed for AI-native 
 
 - **Process Management**: Spawn, monitor, and control long-running processes with PTY support
 - **Dual Log Storage**: Raw logs for humans, structured summaries for AI agents
-- **Pattern Detection**: Automatically detects ports, URLs, errors, file paths, and key events
+- **Pattern Detection**: Automatically detects ports, URLs, errors, file paths, and key events with deduplication
 - **Resource Monitoring**: Real-time CPU and memory usage tracking via sysinfo
+- **Enhanced AI Agent API**: Structured query system for efficient AI interaction
+- **Intelligent Summarization**: Error pattern analysis, time-based metrics, and recommendations
 - **REST API**: Full control via HTTP endpoints (Axum framework)
 - **WebSocket Streaming**: Real-time log streaming for live monitoring
 - **CLI Interface**: Human-friendly command-line tool
@@ -52,6 +54,13 @@ Agent Process Manager (APM) is a standalone Rust service designed for AI-native 
    - Provides native terminal attachment
    - Enables persistent sessions
 
+7. **Log Summarization** (`src/logs/summary.rs`)
+   - Real-time data integration with ProcessInfo
+   - Error pattern normalization and grouping
+   - Time-based metrics (error rates, log velocity)
+   - Intelligent recommendation generation
+   - Resource usage analysis
+
 ## API Endpoints
 
 ```bash
@@ -69,8 +78,10 @@ GET    /api/logs/:id/stream        # WebSocket log streaming
 GET    /api/logs/:id/raw           # Raw log output
 
 # AI Agent Endpoints
-POST   /api/agent/query            # Query logs with context
+POST   /api/agent/query            # Structured query system for AI agents
 GET    /api/agent/summary          # Get system summary
+GET    /api/agent/query-schema     # Get available query types and parameters
+GET    /api/agent/capabilities     # Get API capabilities and features
 
 # System
 GET    /health                     # Health check
@@ -102,8 +113,13 @@ apm attach <name>                 # Attach to process (uses tmux attach)
 # Build
 cargo build
 
-# Run tests
+# Run all tests
 cargo test
+
+# Run specific test suites
+cargo test --test agent_api_test        # AI Agent API tests
+cargo test --test log_summarizer_test   # LogSummarizer tests
+cargo test --test log_patterns_test     # Pattern detection tests
 
 # Start daemon for development
 RUST_LOG=agent_process_manager=debug ./target/debug/apm start
@@ -111,6 +127,11 @@ RUST_LOG=agent_process_manager=debug ./target/debug/apm start
 # Test with example processes
 ./target/debug/apm spawn test-server python3 -- -m http.server 8080
 ./target/debug/apm spawn test-app node -- app.js
+
+# Test AI Agent API
+curl -X POST http://localhost:7337/api/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{"type": "system_overview"}'
 ```
 
 ### Adding New Features
@@ -119,6 +140,8 @@ RUST_LOG=agent_process_manager=debug ./target/debug/apm start
 2. **API Endpoints**: Add routes in `src/api/mod.rs` and handlers in `src/api/handlers.rs`
 3. **CLI Commands**: Add commands in `src/main.rs` using clap
 4. **Process Features**: Extend `ProcessConfig` in `src/process/supervisor.rs`
+5. **Agent Queries**: Add new query types in `AgentQuery` enum and implement handlers
+6. **Log Analysis**: Extend `LogSummarizer` with new metrics and recommendation logic
 
 ### Database Schema
 
@@ -159,6 +182,131 @@ Health metrics are automatically collected:
 - Updates every 2 seconds while process is running
 - Exposed in all process info endpoints
 
+## Enhanced AI Agent API
+
+The structured query system provides 6 specialized query types:
+
+### System Overview
+```bash
+curl -X POST http://localhost:7337/api/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{"type": "system_overview"}'
+```
+
+### Process Errors
+```bash
+curl -X POST http://localhost:7337/api/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "process_errors",
+    "time_window": "5m",
+    "min_severity": "error"
+  }'
+```
+
+### Port Mapping
+```bash
+curl -X POST http://localhost:7337/api/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "port_mapping",
+    "include_urls": true
+  }'
+```
+
+### Performance Metrics
+```bash
+curl -X POST http://localhost:7337/api/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "performance_metrics",
+    "metrics": ["cpu", "memory"]
+  }'
+```
+
+### Log Search
+```bash
+curl -X POST http://localhost:7337/api/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "log_search",
+    "pattern": "error",
+    "limit": 10
+  }'
+```
+
+### Event Correlation
+```bash
+curl -X POST http://localhost:7337/api/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "event_correlation",
+    "event_types": ["error", "key_event"],
+    "time_window": "1h"
+  }'
+```
+
+### Query Schema and Capabilities
+```bash
+# Get all available query types and their parameters
+curl http://localhost:7337/api/agent/query-schema
+
+# Get API capabilities
+curl http://localhost:7337/api/agent/capabilities
+```
+
+## Enhanced Log Summarization
+
+The LogSummarizer now provides real-time data analysis:
+
+### Error Pattern Analysis
+- Normalizes similar errors into patterns
+- Tracks occurrence counts and timestamps
+- Groups related errors for better insights
+
+### Time-based Metrics
+- Error rate (errors per minute)
+- Warning rate (warnings per minute) 
+- Log velocity (logs per minute)
+- Time span analysis
+
+### Intelligent Recommendations
+- High error rate detection
+- Resource usage alerts (CPU > 80%, memory > 1GB)
+- Port conflict detection
+- Log volume analysis
+
+### Sample ProcessSummary Response
+```json
+{
+  "status": "Running",
+  "uptime": "2h 15m",
+  "key_events": ["Server started", "Database connected"],
+  "recent_errors": ["Connection timeout", "Auth failed"],
+  "detected_urls": ["http://localhost:8080"],
+  "detected_ports": [8080, 5432],
+  "resource_usage": {
+    "cpu_percent": "15.2%",
+    "memory_mb": "256.8MB"
+  },
+  "error_patterns": [
+    {
+      "pattern": "connection [path] failed",
+      "count": 5,
+      "first_seen": "2023-01-01T10:00:00Z",
+      "last_seen": "2023-01-01T10:15:00Z"
+    }
+  ],
+  "metrics": {
+    "total_logs": 1520,
+    "error_rate": 2.3,
+    "warning_rate": 0.8,
+    "log_velocity": 12.5,
+    "time_span_minutes": 135.0
+  }
+}
+```
+
 ## Common Tasks
 
 ### Debugging WebSocket Issues
@@ -186,6 +334,11 @@ curl http://localhost:7337/api/processes/<id>/health
 
 # Get AI-friendly summary
 curl http://localhost:7337/api/agent/summary
+
+# Query with structured API
+curl -X POST http://localhost:7337/api/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{"type": "system_overview"}'
 ```
 
 ### tmux Integration
