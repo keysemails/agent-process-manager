@@ -34,6 +34,8 @@ pub fn create_router(
         // Agent endpoints
         .route("/api/agent/query", post(handlers::agent_query))
         .route("/api/agent/summary", get(handlers::agent_summary))
+        .route("/api/agent/query-schema", get(handlers::get_query_schema))
+        .route("/api/agent/capabilities", get(handlers::get_capabilities))
         
         // Human endpoints
         .route("/api/logs/:id/raw", get(handlers::get_raw_logs))
