@@ -37,11 +37,25 @@ impl PatternDetector {
             },
             CompiledPattern {
                 name: "port",
-                regex: Regex::new(r"(?i)(?:port[s]?\s*[:=]?\s*|(?:on|at)\s+port\s+|listening\s+on\s*:?\s*|started\s+on\s+|(?:(?:0\.0\.0\.0|localhost|127\.0\.0\.1|::1|::):|https?://[^:]+:))(\d{1,5})\b").unwrap(),
+                // Primary port detection - explicit port contexts and URLs
+                regex: Regex::new(r"(?i)(?:(?:port[s]?\s*[:=]?\s*|listening\s+on\s*:?\s*|started\s+on\s+)(\d{1,5})\b|(?:(?:0\.0\.0\.0|localhost|127\.0\.0\.1|::1|::):|https?://[^:]+:)(\d{1,5})\b)").unwrap(),
+                extractor: Box::new(|caps| {
+                    // Try group 1 first (port contexts), then group 2 (URL/IP contexts)
+                    caps.get(1).or_else(|| caps.get(2))
+                        .and_then(|m| m.as_str().parse::<u16>().ok())
+                        .filter(|&p| p > 0)
+                        .map(DetectedPattern::Port)
+                }),
+            },
+            CompiledPattern {
+                name: "port_secondary",
+                // Secondary port detection - "at/on" followed by a number
+                // But exclude timestamps by checking context
+                regex: Regex::new(r"(?i)\b(?:at|on)\s+(\d{3,5})\b").unwrap(),
                 extractor: Box::new(|caps| {
                     caps.get(1)
                         .and_then(|m| m.as_str().parse::<u16>().ok())
-                        .filter(|&p| p > 0)
+                        .filter(|&p| p >= 100)  // Ports below 100 are rare, helps avoid false positives
                         .map(DetectedPattern::Port)
                 }),
             },
@@ -96,12 +110,21 @@ impl PatternDetector {
 
     pub fn detect(&self, line: &str) -> Vec<DetectedPattern> {
         let mut detected = Vec::new();
+        let mut seen_ports = std::collections::HashSet::new();
 
         for pattern in &self.patterns {
             // For patterns that can occur multiple times, find all matches
             for captures in pattern.regex.captures_iter(line) {
                 if let Some(result) = (pattern.extractor)(&captures) {
-                    detected.push(result);
+                    // Deduplicate port detections
+                    match &result {
+                        DetectedPattern::Port(port) => {
+                            if seen_ports.insert(*port) {
+                                detected.push(result);
+                            }
+                        }
+                        _ => detected.push(result),
+                    }
                 }
             }
         }
@@ -174,5 +197,79 @@ mod tests {
         let patterns = detector.detect("Server running at http://localhost:3000");
         
         assert!(patterns.iter().any(|p| matches!(p, DetectedPattern::Url(url) if url == "http://localhost:3000")));
+    }
+
+    #[test]
+    fn test_timestamp_patterns() {
+        let detector = PatternDetector::new();
+        
+        // Test various timestamp formats that should NOT detect ports
+        let timestamp_cases = vec![
+            "[11:41:22] Processing request",
+            "[10:56:09] Starting server",
+            "Time: 12:34:56",
+            "2024-01-01 12:34:56 INFO Server started",
+            "[2024-01-01 12:34:56] INFO: Application ready",
+            "12:34:56.789 Debug message",
+            "[12:34] Short time format",
+        ];
+        
+        for input in timestamp_cases {
+            let patterns = detector.detect(input);
+            let ports: Vec<u16> = patterns.iter().filter_map(|p| {
+                if let DetectedPattern::Port(port) = p {
+                    Some(*port)
+                } else {
+                    None
+                }
+            }).collect();
+            
+            assert!(ports.is_empty(), 
+                "Timestamp '{}' incorrectly detected ports: {:?}", input, ports);
+        }
+    }
+    
+    #[test]
+    fn test_specific_timestamp_issue() {
+        let detector = PatternDetector::new();
+        
+        // Test various cases that might trigger the bug
+        let test_cases = vec![
+            ("[11:41:22] Processing request", false),
+            ("11:41:22 Processing request", false),
+            ("At 11:41:22 server started", false),
+            ("Started at 11:41:22", false),
+            ("Time is 11:41:22", false),
+            ("11:41:22.123 Debug log", false),
+            ("at 11:41:22", false),  // "at" followed by timestamp
+            ("Started at 8080", true),  // "at" followed by port number SHOULD detect
+            ("localhost:41 running", true),  // This SHOULD detect port 41
+            ("Listening on :8080", true),  // Should detect 8080
+            ("Server started on 3000", true),  // Should detect 3000
+        ];
+        
+        for (input, should_detect) in test_cases {
+            let patterns = detector.detect(input);
+            let ports: Vec<u16> = patterns.iter().filter_map(|p| {
+                if let DetectedPattern::Port(port) = p {
+                    Some(*port)
+                } else {
+                    None
+                }
+            }).collect();
+            
+            println!("\nTesting: {} (should detect: {})", input, should_detect);
+            for port in &ports {
+                println!("  Found port: {}", port);
+            }
+            
+            if should_detect {
+                assert!(!ports.is_empty(), 
+                    "Failed to detect port in '{}'", input);
+            } else {
+                assert!(ports.is_empty(), 
+                    "Incorrectly detected ports {:?} in '{}'", ports, input);
+            }
+        }
     }
 }

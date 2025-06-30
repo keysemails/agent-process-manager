@@ -21,17 +21,19 @@ This document outlines planned features and improvements for the Agent Process M
 - Automatic session cleanup on process termination
 
 ### 2. Fix Pattern Detection - Timestamp Components Mislabeled as Ports
-**Status**: Bug identified  
+**Status**: ✅ Completed  
 **Complexity**: Low  
 **Location**: `src/logs/patterns.rs`
 
-- [ ] Fix regex pattern that incorrectly identifies timestamp components as ports
-- [ ] Ensure port detection only matches actual port numbers in appropriate contexts
-- [ ] Add tests to prevent regression
+- [x] Fix regex pattern that incorrectly identifies timestamp components as ports
+- [x] Ensure port detection only matches actual port numbers in appropriate contexts
+- [x] Add tests to prevent regression
 
 **Technical Notes**:
-- Current issue: timestamps like `[11:41:22]` have `41` and `22` detected as ports
-- Need to refine port regex to require proper context (e.g., "port 8080", ":8080")
+- Fixed by splitting port detection into two patterns: primary (explicit port contexts) and secondary (at/on contexts)
+- Added deduplication logic to prevent duplicate port detections
+- Secondary pattern requires ports >= 100 to avoid false positives with timestamps
+- Comprehensive tests added to ensure timestamps are not detected as ports
 
 ### 3. Enhanced AI Agent API
 **Status**: Basic implementation exists  
