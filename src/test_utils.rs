@@ -47,6 +47,7 @@ pub mod test_utils {
             env: HashMap::new(),
             tags: vec![],
             pty: false,
+            use_tmux: false,
             restart_policy: RestartPolicy::default(),
             resources: ResourceLimits::default(),
         }

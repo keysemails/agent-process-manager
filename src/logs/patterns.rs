@@ -37,11 +37,11 @@ impl PatternDetector {
             },
             CompiledPattern {
                 name: "port",
-                regex: Regex::new(r"(?i)(?:ports?\s+|port:?\s*|on\s+port\s*|on\s+|:\s*)(\d{1,5})\b").unwrap(),
+                regex: Regex::new(r"(?i)(?:port[s]?\s*[:=]?\s*|(?:on|at)\s+port\s+|listening\s+on\s*:?\s*|started\s+on\s+|(?:(?:0\.0\.0\.0|localhost|127\.0\.0\.1|::1|::):|https?://[^:]+:))(\d{1,5})\b").unwrap(),
                 extractor: Box::new(|caps| {
                     caps.get(1)
                         .and_then(|m| m.as_str().parse::<u16>().ok())
-                        .filter(|&p| p > 0 && p <= 65535)
+                        .filter(|&p| p > 0)
                         .map(DetectedPattern::Port)
                 }),
             },
@@ -143,6 +143,16 @@ mod tests {
             ("Listening on :8080", Some(8080)),
             ("Server started on 5000", Some(5000)),
             ("Random text without port", None),
+            // Test that timestamps are NOT detected as ports
+            ("[11:41:22] Processing request", None),
+            ("[10:56:09] Starting server", None),
+            ("Time: 12:34:56", None),
+            // Test valid port patterns still work
+            ("http://localhost:8080", Some(8080)),
+            ("0.0.0.0:3000", Some(3000)),
+            ("listening on port 80", Some(80)),
+            ("Port: 443", Some(443)),
+            ("on port 9000", Some(9000)),
         ];
 
         for (input, expected_port) in test_cases {
