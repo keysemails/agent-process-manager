@@ -1,0 +1,30 @@
+# Example APM configuration with MCP enabled
+
+server:
+  host: "0.0.0.0"
+  port: 7337
+
+storage:
+  database_url: "sqlite:apm.db"
+  log_retention_days: 7
+  max_log_size_mb: 1000
+
+ui:
+  theme: "dark"
+  dashboard_auth: "none"
+
+# MCP Configuration
+mcp:
+  enabled: true
+  stdio: true  # Use stdio transport (recommended for AI agents)
+  # tcp_host: "127.0.0.1"  # Uncomment for TCP transport
+  # tcp_port: 9337         # Uncomment for TCP transport
+
+patterns:
+  custom:
+    - name: "API Error"
+      pattern: "API.*error|failed.*request"
+      severity: "high"
+    - name: "Database Connection"
+      pattern: "database.*connect|connection.*lost"
+      severity: "critical"

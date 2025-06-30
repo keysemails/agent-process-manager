@@ -10,7 +10,15 @@
       "Bash(find:*)",
       "Bash(cargo doc:*)",
       "Bash(cargo check:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue:*)",
+      "Bash(cargo tree:*)",
+      "Bash(curl:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(cargo metadata:*)",
+      "Bash(cargo fetch:*)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ],
     "deny": []
   }

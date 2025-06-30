@@ -8,6 +8,7 @@ pub mod config;
 pub mod logs;
 pub mod process;
 pub mod tmux;
+pub mod mcp;
 
 #[cfg(test)]
 pub mod test_utils;

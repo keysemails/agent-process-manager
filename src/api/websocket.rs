@@ -444,8 +444,9 @@ async fn handle_tmux_attach(socket: WebSocket, session_name: String) {
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
                         match parsed["type"].as_str() {
                             Some("resize") => {
-                                // Tracked in GitHub Issue #10: Implement tmux pane resize for WebSocket terminal
-                                // Implementation pending
+                                // WebSocket terminal attachment deferred - see Issue #10
+                                // Using tmux directly provides better terminal experience
+                                // May revisit based on Vibe integration needs
                             }
                             _ => {}
                         }

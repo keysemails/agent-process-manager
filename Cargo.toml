@@ -15,6 +15,7 @@ path = "src/main.rs"
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
 tokio-util = { version = "0.7", features = ["compat"] }
+async-trait = "0.1"
 
 # Web framework
 axum = { version = "0.7", features = ["ws"] }
@@ -78,6 +79,16 @@ strip-ansi-escapes = "0.2"
 # Terminal UI
 # ratatui = "0.28"
 crossterm = "0.28"
+
+# MCP (Model Context Protocol) support
+[dependencies.rmcp]
+git = "https://github.com/modelcontextprotocol/rust-sdk"
+rev = "1b3db8959c2769d593d33977365eaf3d99632551"
+features = ["server", "transport-io"]
+
+[dependencies.rmcp-macros]
+git = "https://github.com/modelcontextprotocol/rust-sdk"
+rev = "1b3db8959c2769d593d33977365eaf3d99632551"
 
 [dev-dependencies]
 tempfile = "3.12"

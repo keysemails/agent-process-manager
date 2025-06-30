@@ -1,7 +1,7 @@
 //! Agent Process Manager CLI and daemon
 
 use agent_process_manager::{
-    api, config::Config, logs::LogStorage, process::ProcessManager,
+    api, config::Config, logs::LogStorage, process::ProcessManager, mcp::McpServer,
 };
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
@@ -24,6 +24,9 @@ enum Commands {
         /// Configuration file path
         #[arg(short, long)]
         config: Option<String>,
+        /// Run as MCP server instead of HTTP daemon
+        #[arg(long)]
+        mcp: bool,
     },
     
     /// Start a new process
@@ -83,9 +86,7 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
+fn init_default_logging() {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -93,24 +94,70 @@ async fn main() -> anyhow::Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
+}
 
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Start { config } => start_daemon(config).await,
+        Commands::Start { config, mcp } => {
+            if mcp {
+                // For MCP mode, initialize logging to stderr
+                tracing_subscriber::registry()
+                    .with(
+                        tracing_subscriber::EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| "agent_process_manager=info".into()),
+                    )
+                    .with(
+                        tracing_subscriber::fmt::layer()
+                            .with_writer(std::io::stderr)
+                            .with_ansi(false)
+                    )
+                    .init();
+                
+                start_mcp_server(config).await
+            } else {
+                // For daemon mode, normal logging
+                tracing_subscriber::registry()
+                    .with(
+                        tracing_subscriber::EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| "agent_process_manager=info".into()),
+                    )
+                    .with(tracing_subscriber::fmt::layer())
+                    .init();
+                    
+                start_daemon(config).await
+            }
+        }
         Commands::StartProcess { name, command, args, tag, pty } => {
+            init_default_logging();
             start_process_cli(name, command, args, tag, pty).await
         }
-        Commands::List => list_processes_cli().await,
+        Commands::List => {
+            init_default_logging();
+            list_processes_cli().await
+        }
         Commands::Logs { name, errors, follow } => {
+            init_default_logging();
             show_logs_cli(name, errors, follow).await
         }
         Commands::Attach { name, read_only } => {
+            init_default_logging();
             attach_to_process_cli(name, read_only).await
         }
-        Commands::Status => show_status_cli().await,
-        Commands::Stop { name } => stop_process_cli(name).await,
-        Commands::Restart { name } => restart_process_cli(name).await,
+        Commands::Status => {
+            init_default_logging();
+            show_status_cli().await
+        }
+        Commands::Stop { name } => {
+            init_default_logging();
+            stop_process_cli(name).await
+        }
+        Commands::Restart { name } => {
+            init_default_logging();
+            restart_process_cli(name).await
+        }
     }
 }
 
@@ -157,6 +204,53 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
     info!("Dashboard available at http://{}/dashboard", addr);
     
     axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+async fn start_mcp_server(config_path: Option<String>) -> anyhow::Result<()> {
+    info!("Starting Agent Process Manager MCP server...");
+
+    // Load configuration
+    let config = if let Some(_path) = config_path {
+        // Load from specific file
+        todo!("Load config from file")
+    } else {
+        Config::load().unwrap_or_default()
+    };
+
+    // Check if MCP is enabled
+    if !config.mcp.enabled && !std::env::var("APM_MCP_ENABLED").is_ok() {
+        error!("MCP server is not enabled in configuration. Set mcp.enabled=true or APM_MCP_ENABLED=1");
+        std::process::exit(1);
+    }
+
+    // Initialize storage
+    let log_storage = Arc::new(
+        LogStorage::new(&config.storage.database_url).await?
+    );
+
+    // Create log channel
+    let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(1000);
+
+    // Initialize process manager
+    let process_manager = Arc::new(ProcessManager::new(log_tx));
+
+    // Start log processing task
+    let storage = log_storage.clone();
+    tokio::spawn(async move {
+        while let Some((process_id, line)) = log_rx.recv().await {
+            if let Err(e) = storage.store(process_id, line).await {
+                error!("Failed to store log: {}", e);
+            }
+        }
+    });
+
+    // Create and run MCP server
+    let mcp_server = McpServer::new(process_manager, log_storage).await?;
+    
+    info!("Starting MCP server in stdio mode");
+    mcp_server.run().await?;
 
     Ok(())
 }

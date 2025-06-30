@@ -8,6 +8,7 @@ pub struct Config {
     pub storage: StorageConfig,
     pub ui: UiConfig,
     pub patterns: PatternConfig,
+    pub mcp: McpConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -49,6 +50,14 @@ pub struct CustomPattern {
     pub severity: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpConfig {
+    pub enabled: bool,
+    pub stdio: bool,
+    pub tcp_host: Option<String>,
+    pub tcp_port: Option<u16>,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -68,6 +77,12 @@ impl Default for Config {
             patterns: PatternConfig {
                 custom: vec![],
             },
+            mcp: McpConfig {
+                enabled: false,
+                stdio: true,
+                tcp_host: None,
+                tcp_port: None,
+            },
         }
     }
 }
@@ -82,6 +97,8 @@ impl Config {
             .set_default("storage.max_log_size_mb", 1000)?
             .set_default("ui.theme", "dark")?
             .set_default("ui.dashboard_auth", "none")?
+            .set_default("mcp.enabled", false)?
+            .set_default("mcp.stdio", true)?
             .add_source(config::File::with_name("apm").required(false))
             .add_source(config::Environment::with_prefix("APM"))
             .build()?;
