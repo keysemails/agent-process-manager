@@ -63,6 +63,7 @@ Agent Process Manager (APM) is a standalone Rust service designed for AI-native 
 
 ## API Endpoints
 
+### HTTP API (Port 7337)
 ```bash
 # Process Management
 POST   /api/processes              # Spawn new process
@@ -86,6 +87,13 @@ GET    /api/agent/capabilities     # Get API capabilities and features
 # System
 GET    /health                     # Health check
 ```
+
+### MCP Server (Port 7338 or Unix Socket)
+When `mcp.enabled=true`, the daemon also runs an MCP server that AI assistants can connect to:
+- **TCP Mode**: Listens on `tcp://127.0.0.1:7338` by default
+- **Unix Socket Mode**: Listens on `/tmp/apm.sock` by default
+- **Tools Available**: spawn, list, logs, stop, query
+- **Transport**: TCP or Unix socket (no longer uses stdio)
 
 ## CLI Commands
 
@@ -124,6 +132,9 @@ cargo test --test log_patterns_test     # Pattern detection tests
 # Start daemon for development
 RUST_LOG=agent_process_manager=debug ./target/debug/apm start
 
+# Start daemon with MCP enabled
+APM_MCP_ENABLED=1 ./target/debug/apm start
+
 # Test with example processes
 ./target/debug/apm spawn test-server python3 -- -m http.server 8080
 ./target/debug/apm spawn test-app node -- app.js
@@ -132,7 +143,29 @@ RUST_LOG=agent_process_manager=debug ./target/debug/apm start
 curl -X POST http://localhost:7337/api/agent/query \
   -H "Content-Type: application/json" \
   -d '{"type": "system_overview"}'
+
+# Test MCP connection (using netcat)
+nc localhost 7338
 ```
+
+### MCP Configuration
+
+To enable MCP server alongside HTTP API, configure in `apm.yaml`:
+
+```yaml
+mcp:
+  enabled: true
+  transport: "tcp"       # or "unix_socket"
+  tcp_host: "127.0.0.1"
+  tcp_port: 7338
+  unix_socket: "/tmp/apm.sock"
+```
+
+Or use environment variables:
+```bash
+APM_MCP_ENABLED=1
+APM_MCP_TRANSPORT=tcp
+APM_MCP_TCP_PORT=7338
 
 ### Adding New Features
 

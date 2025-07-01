@@ -61,6 +61,10 @@ impl HealthMonitor {
         self.health_data.read().await.get(process_id).cloned()
     }
 
+    pub async fn remove_process(&self, process_id: &ProcessId) {
+        self.health_data.write().await.remove(process_id);
+    }
+
     pub async fn start_monitoring(&self) {
         let system = self.system.clone();
         let _health_data = self.health_data.clone();

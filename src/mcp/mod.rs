@@ -21,6 +21,9 @@ use crate::process::{ProcessConfig, ProcessId, ProcessManager};
 
 use std::future::Future;
 
+mod tcp_server;
+pub use tcp_server::start_mcp_server;
+
 /// MCP server implementation for Agent Process Manager
 pub struct McpServer {
     handler: McpServerHandler,
@@ -28,9 +31,9 @@ pub struct McpServer {
 
 /// Internal handler that implements the MCP protocol
 #[derive(Clone)]
-struct McpServerHandler {
-    process_manager: Arc<ProcessManager>,
-    log_storage: Arc<LogStorage>,
+pub(crate) struct McpServerHandler {
+    pub process_manager: Arc<ProcessManager>,
+    pub log_storage: Arc<LogStorage>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

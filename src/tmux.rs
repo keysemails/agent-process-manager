@@ -275,7 +275,7 @@ impl TmuxManager {
     }
 
     /// List all sessions  
-    pub fn list_sessions() -> Result<Vec<TmuxSession>, ApmError> {
+    pub fn list_sessions_detailed() -> Result<Vec<TmuxSession>, ApmError> {
         let output = Command::new("tmux")
             .args(&[
                 "list-sessions",
@@ -306,6 +306,59 @@ impl TmuxManager {
         }
         
         Ok(sessions)
+    }
+    
+    /// Set user options for a tmux session (for metadata storage)
+    pub fn set_session_metadata(session_name: &str, key: &str, value: &str) -> Result<(), ApmError> {
+        let output = Command::new("tmux")
+            .args(&["set-option", "-t", session_name, &format!("@{}", key), value])
+            .output()
+            .map_err(|e| ApmError::ProcessError(format!("Failed to set tmux option: {}", e)))?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(ApmError::ProcessError(format!("Failed to set session option: {}", stderr)));
+        }
+        
+        Ok(())
+    }
+    
+    /// Get user options from a tmux session
+    pub fn get_session_metadata(session_name: &str, key: &str) -> Result<String, ApmError> {
+        let output = Command::new("tmux")
+            .args(&["show-option", "-vt", session_name, &format!("@{}", key)])
+            .output()
+            .map_err(|e| ApmError::ProcessError(format!("Failed to get tmux option: {}", e)))?;
+        
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        } else {
+            Err(ApmError::ProcessError("Option not found".to_string()))
+        }
+    }
+    
+    /// List all tmux sessions (just names)
+    pub fn list_sessions() -> Result<Vec<String>, ApmError> {
+        let output = Command::new("tmux")
+            .args(&["list-sessions", "-F", "#{session_name}"])
+            .output()
+            .map_err(|e| ApmError::ProcessError(format!("Failed to list tmux sessions: {}", e)))?;
+        
+        if output.status.success() {
+            let sessions = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(|s| s.to_string())
+                .collect();
+            Ok(sessions)
+        } else {
+            // If no sessions exist, tmux returns non-zero but that's ok
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("no server running") || stderr.contains("no sessions") {
+                Ok(Vec::new())
+            } else {
+                Err(ApmError::ProcessError(format!("Failed to list sessions: {}", stderr)))
+            }
+        }
     }
 }
 

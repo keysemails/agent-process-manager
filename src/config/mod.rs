@@ -7,6 +7,7 @@ pub struct Config {
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub ui: UiConfig,
+    #[serde(default)]
     pub patterns: PatternConfig,
     pub mcp: McpConfig,
 }
@@ -38,8 +39,9 @@ pub enum AuthMode {
     Oauth,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct PatternConfig {
+    #[serde(default)]
     pub custom: Vec<CustomPattern>,
 }
 
@@ -51,11 +53,39 @@ pub struct CustomPattern {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTransport {
+    Tcp,
+    UnixSocket,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct McpConfig {
     pub enabled: bool,
-    pub stdio: bool,
-    pub tcp_host: Option<String>,
-    pub tcp_port: Option<u16>,
+    #[serde(default = "default_mcp_transport")]
+    pub transport: McpTransport,
+    #[serde(default = "default_tcp_host")]
+    pub tcp_host: String,
+    #[serde(default = "default_tcp_port")]
+    pub tcp_port: u16,
+    #[serde(default = "default_unix_socket")]
+    pub unix_socket: String,
+}
+
+fn default_mcp_transport() -> McpTransport {
+    McpTransport::Tcp
+}
+
+fn default_tcp_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_tcp_port() -> u16 {
+    7338
+}
+
+fn default_unix_socket() -> String {
+    "/tmp/apm.sock".to_string()
 }
 
 impl Default for Config {
@@ -79,9 +109,10 @@ impl Default for Config {
             },
             mcp: McpConfig {
                 enabled: false,
-                stdio: true,
-                tcp_host: None,
-                tcp_port: None,
+                transport: McpTransport::Tcp,
+                tcp_host: "127.0.0.1".to_string(),
+                tcp_port: 7338,
+                unix_socket: "/tmp/apm.sock".to_string(),
             },
         }
     }
@@ -89,7 +120,14 @@ impl Default for Config {
 
 impl Config {
     pub fn load() -> Result<Self, config::ConfigError> {
-        let config = config::Config::builder()
+        // Check if config file exists
+        if std::path::Path::new("apm.yaml").exists() {
+            eprintln!("Found apm.yaml in current directory");
+        } else {
+            eprintln!("apm.yaml not found in current directory");
+        }
+        
+        let builder = config::Config::builder()
             .set_default("server.host", "0.0.0.0")?
             .set_default("server.port", 7337)?
             .set_default("storage.database_url", "sqlite:apm.db")?
@@ -98,10 +136,20 @@ impl Config {
             .set_default("ui.theme", "dark")?
             .set_default("ui.dashboard_auth", "none")?
             .set_default("mcp.enabled", false)?
-            .set_default("mcp.stdio", true)?
-            .add_source(config::File::with_name("apm").required(false))
+            .set_default("mcp.transport", "tcp")?
+            .set_default("mcp.tcp_host", "127.0.0.1")?
+            .set_default("mcp.tcp_port", 7338)?
+            .set_default("mcp.unix_socket", "/tmp/apm.sock")?
+            .add_source(config::File::from(std::path::Path::new("apm.yaml")).required(false))
             .add_source(config::Environment::with_prefix("APM"))
             .build()?;
+
+        let config = builder;
+        
+        // Debug what we got
+        if let Ok(mcp_enabled) = config.get_bool("mcp.enabled") {
+            eprintln!("Config has mcp.enabled = {}", mcp_enabled);
+        }
 
         config.try_deserialize()
     }

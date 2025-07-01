@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "apm": {
+      "command": "nc",
+      "args": ["localhost", "7338"],
+      "env": {}
+    }
+  }
+}

@@ -1,12 +1,14 @@
 //! Agent Process Manager CLI and daemon
 
 use agent_process_manager::{
-    api, config::Config, logs::LogStorage, process::ProcessManager, mcp::McpServer,
+    api, config::Config, logs::LogStorage, process::ProcessManager, mcp::start_mcp_server,
 };
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use tracing::{info, error};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 #[derive(Parser)]
 #[command(name = "apm")]
@@ -24,9 +26,6 @@ enum Commands {
         /// Configuration file path
         #[arg(short, long)]
         config: Option<String>,
-        /// Run as MCP server instead of HTTP daemon
-        #[arg(long)]
-        mcp: bool,
     },
     
     /// Start a new process
@@ -84,6 +83,16 @@ enum Commands {
         /// Process name or ID
         name: String,
     },
+    
+    /// Bridge stdio to MCP TCP server
+    McpBridge {
+        /// TCP host to connect to
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// TCP port to connect to
+        #[arg(long, default_value = "7338")]
+        port: u16,
+    },
 }
 
 fn init_default_logging() {
@@ -101,34 +110,17 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Start { config, mcp } => {
-            if mcp {
-                // For MCP mode, initialize logging to stderr
-                tracing_subscriber::registry()
-                    .with(
-                        tracing_subscriber::EnvFilter::try_from_default_env()
-                            .unwrap_or_else(|_| "agent_process_manager=info".into()),
-                    )
-                    .with(
-                        tracing_subscriber::fmt::layer()
-                            .with_writer(std::io::stderr)
-                            .with_ansi(false)
-                    )
-                    .init();
+        Commands::Start { config } => {
+            // Initialize logging
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "agent_process_manager=info".into()),
+                )
+                .with(tracing_subscriber::fmt::layer())
+                .init();
                 
-                start_mcp_server(config).await
-            } else {
-                // For daemon mode, normal logging
-                tracing_subscriber::registry()
-                    .with(
-                        tracing_subscriber::EnvFilter::try_from_default_env()
-                            .unwrap_or_else(|_| "agent_process_manager=info".into()),
-                    )
-                    .with(tracing_subscriber::fmt::layer())
-                    .init();
-                    
-                start_daemon(config).await
-            }
+            start_daemon(config).await
         }
         Commands::StartProcess { name, command, args, tag, pty } => {
             init_default_logging();
@@ -158,6 +150,10 @@ async fn main() -> anyhow::Result<()> {
             init_default_logging();
             restart_process_cli(name).await
         }
+        Commands::McpBridge { host, port } => {
+            // Don't initialize logging for bridge mode - we need clean stdio
+            run_mcp_bridge(host, port).await
+        }
     }
 }
 
@@ -169,7 +165,16 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
         // Load from specific file
         todo!("Load config from file")
     } else {
-        Config::load().unwrap_or_default()
+        match Config::load() {
+            Ok(loaded_config) => {
+                info!("Successfully loaded config - MCP enabled: {}", loaded_config.mcp.enabled);
+                loaded_config
+            }
+            Err(e) => {
+                error!("Failed to load config: {}. Using defaults.", e);
+                Config::default()
+            }
+        }
     };
 
     // Initialize storage
@@ -181,7 +186,10 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
     let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(1000);
 
     // Initialize process manager
-    let process_manager = Arc::new(ProcessManager::new(log_tx));
+    let process_manager = Arc::new(ProcessManager::new(log_storage.clone(), log_tx));
+    
+    // Initialize and recover orphaned sessions
+    process_manager.initialize().await?;
 
     // Start log processing task
     let storage = log_storage.clone();
@@ -192,68 +200,59 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
             }
         }
     });
+
+    // Start MCP server if enabled
+    let mcp_handle = if config.mcp.enabled {
+        info!("Starting MCP server...");
+        let mcp_manager = process_manager.clone();
+        let mcp_storage = log_storage.clone();
+        let mcp_config = config.mcp.clone();
+        
+        Some(tokio::spawn(async move {
+            if let Err(e) = start_mcp_server(mcp_manager, mcp_storage, mcp_config).await {
+                error!("MCP server error: {}", e);
+            }
+        }))
+    } else {
+        None
+    };
 
     // Create router
     let app = api::create_router(process_manager, log_storage);
 
-    // Start server
+    // Start HTTP server
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     
-    info!("APM daemon listening on {}", addr);
+    info!("APM HTTP API listening on {}", addr);
     info!("Dashboard available at http://{}/dashboard", addr);
     
-    axum::serve(listener, app).await?;
-
-    Ok(())
-}
-
-async fn start_mcp_server(config_path: Option<String>) -> anyhow::Result<()> {
-    info!("Starting Agent Process Manager MCP server...");
-
-    // Load configuration
-    let config = if let Some(_path) = config_path {
-        // Load from specific file
-        todo!("Load config from file")
-    } else {
-        Config::load().unwrap_or_default()
+    // Setup shutdown signal
+    let shutdown_signal = async {
+        tokio::signal::ctrl_c().await.ok();
+        info!("Shutdown signal received");
     };
 
-    // Check if MCP is enabled
-    if !config.mcp.enabled && !std::env::var("APM_MCP_ENABLED").is_ok() {
-        error!("MCP server is not enabled in configuration. Set mcp.enabled=true or APM_MCP_ENABLED=1");
-        std::process::exit(1);
-    }
-
-    // Initialize storage
-    let log_storage = Arc::new(
-        LogStorage::new(&config.storage.database_url).await?
-    );
-
-    // Create log channel
-    let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(1000);
-
-    // Initialize process manager
-    let process_manager = Arc::new(ProcessManager::new(log_tx));
-
-    // Start log processing task
-    let storage = log_storage.clone();
-    tokio::spawn(async move {
-        while let Some((process_id, line)) = log_rx.recv().await {
-            if let Err(e) = storage.store(process_id, line).await {
-                error!("Failed to store log: {}", e);
+    // Run servers with graceful shutdown
+    tokio::select! {
+        result = axum::serve(listener, app) => {
+            if let Err(e) = result {
+                error!("HTTP server error: {}", e);
             }
         }
-    });
+        _ = shutdown_signal => {
+            info!("Shutting down gracefully...");
+        }
+    }
 
-    // Create and run MCP server
-    let mcp_server = McpServer::new(process_manager, log_storage).await?;
-    
-    info!("Starting MCP server in stdio mode");
-    mcp_server.run().await?;
+    // Cancel MCP server if running
+    if let Some(handle) = mcp_handle {
+        handle.abort();
+    }
 
     Ok(())
 }
+
 
 async fn start_process_cli(
     name: String,
@@ -586,6 +585,72 @@ async fn restart_process_cli(name: String) -> anyhow::Result<()> {
         println!("Restarted process '{}'", name);
     } else {
         eprintln!("Failed to restart process: {}", response.text().await?);
+    }
+
+    Ok(())
+}
+
+async fn run_mcp_bridge(host: String, port: u16) -> anyhow::Result<()> {
+    // Try to connect to the MCP TCP server
+    let addr = format!("{}:{}", host, port);
+    let stream = match TcpStream::connect(&addr).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            eprintln!("Failed to connect to MCP server at {}: {}", addr, e);
+            eprintln!("Make sure the APM daemon is running with MCP enabled");
+            std::process::exit(1);
+        }
+    };
+
+    // Split the TCP stream into read and write halves
+    let (mut tcp_reader, mut tcp_writer) = stream.into_split();
+    
+    // Get stdin and stdout
+    let mut stdin = io::stdin();
+    let mut stdout = io::stdout();
+
+    // Use tokio::select! to handle bidirectional copying
+    tokio::select! {
+        // Copy stdin -> TCP
+        result = async {
+            let mut buf = vec![0; 8192];
+            loop {
+                match stdin.read(&mut buf).await {
+                    Ok(0) => break Ok(()), // EOF
+                    Ok(n) => {
+                        if let Err(e) = tcp_writer.write_all(&buf[..n]).await {
+                            break Err(e);
+                        }
+                    }
+                    Err(e) => break Err(e),
+                }
+            }
+        } => {
+            if let Err(e) = result {
+                eprintln!("Error copying stdin to TCP: {}", e);
+            }
+        }
+        
+        // Copy TCP -> stdout
+        result = async {
+            let mut buf = vec![0; 8192];
+            loop {
+                match tcp_reader.read(&mut buf).await {
+                    Ok(0) => break Ok(()), // EOF
+                    Ok(n) => {
+                        if let Err(e) = stdout.write_all(&buf[..n]).await {
+                            break Err(e);
+                        }
+                        stdout.flush().await?;
+                    }
+                    Err(e) => break Err(e),
+                }
+            }
+        } => {
+            if let Err(e) = result {
+                eprintln!("Error copying TCP to stdout: {}", e);
+            }
+        }
     }
 
     Ok(())

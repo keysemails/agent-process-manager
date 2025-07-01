@@ -155,11 +155,34 @@ curl -X POST http://localhost:7337/api/agent/query \
 APM consists of:
 - **Daemon**: Background service managing processes with tmux integration
 - **CLI**: Command-line interface for human interaction
-- **API**: REST endpoints for programmatic control
+- **HTTP API**: REST endpoints for programmatic control (port 7337)
+- **MCP Server**: Model Context Protocol server for AI assistants (port 7338)
 - **Storage**: SQLite database for log persistence and pattern detection
 - **AI Agent API**: Structured query system for efficient AI interaction
 - **Log Summarization**: Real-time analysis with error patterns and metrics
 - **Pattern Detection**: Intelligent extraction of ports, URLs, errors, and events
+
+## MCP (Model Context Protocol) Integration
+
+APM includes built-in MCP server support, allowing AI assistants like Claude to directly manage processes:
+
+### Enabling MCP
+```yaml
+# In apm.yaml
+mcp:
+  enabled: true
+  transport: "tcp"      # or "unix_socket"
+  tcp_port: 7338       # Default port
+```
+
+### Available MCP Tools
+- `spawn`: Start new processes
+- `list`: List all processes with status
+- `logs`: Retrieve process logs
+- `stop`: Stop processes
+- `query`: Execute structured queries (same as AI Agent API)
+
+The MCP server runs alongside the HTTP API when enabled, sharing the same process manager and log storage.
 
 ## Testing
 

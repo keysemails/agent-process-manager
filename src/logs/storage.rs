@@ -1,9 +1,9 @@
 //! Log storage implementation with dual storage (raw + structured)
 
-use crate::{Result, process::ProcessId};
+use crate::{Result, process::{ProcessId, ProcessStatus, ProcessConfig}};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::{SqlitePool, Row};
 use std::collections::VecDeque;
 use tokio::sync::RwLock;
 use std::sync::Arc;
@@ -67,6 +67,20 @@ impl LogStorage {
         
         let db = SqlitePool::connect(&db_url).await?;
         
+        // Set pragmas for better concurrent access
+        // WAL mode is crucial for multiple processes accessing the same database
+        sqlx::query("PRAGMA journal_mode = WAL")
+            .execute(&db)
+            .await?;
+        
+        sqlx::query("PRAGMA busy_timeout = 5000")  // Wait up to 5 seconds if db is locked
+            .execute(&db)
+            .await?;
+        
+        sqlx::query("PRAGMA synchronous = NORMAL")  // Better performance while maintaining safety
+            .execute(&db)
+            .await?;
+        
         // Create tables
         sqlx::query(r#"
             CREATE TABLE IF NOT EXISTS logs (
@@ -85,6 +99,34 @@ impl LogStorage {
             
             CREATE INDEX IF NOT EXISTS idx_logs_level 
             ON logs(process_id, level);
+            
+            -- Process management table
+            CREATE TABLE IF NOT EXISTS processes (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                command TEXT NOT NULL,
+                args TEXT,  -- JSON array
+                status TEXT NOT NULL,
+                started_at DATETIME NOT NULL,
+                stopped_at DATETIME,
+                pid INTEGER,
+                tmux_session TEXT,
+                restart_count INTEGER DEFAULT 0,
+                config TEXT NOT NULL,  -- Full ProcessConfig as JSON
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            
+            CREATE INDEX IF NOT EXISTS idx_processes_status ON processes(status);
+            CREATE INDEX IF NOT EXISTS idx_processes_name ON processes(name);
+            CREATE INDEX IF NOT EXISTS idx_processes_tmux ON processes(tmux_session);
+            
+            -- Trigger to update updated_at on changes
+            CREATE TRIGGER IF NOT EXISTS update_processes_timestamp 
+            AFTER UPDATE ON processes
+            BEGIN
+                UPDATE processes SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+            END;
         "#)
         .execute(&db)
         .await?;
@@ -320,6 +362,259 @@ impl LogStorage {
         buffers.remove(process_id);
         
         Ok(())
+    }
+    
+    // Process management methods
+    
+    pub async fn store_process(&self, 
+        id: &ProcessId, 
+        name: &str,
+        command: &str,
+        args: &[String],
+        status: ProcessStatus,
+        config: &ProcessConfig,
+        tmux_session: Option<&str>
+    ) -> Result<()> {
+        let args_json = serde_json::to_string(args)?;
+        let config_json = serde_json::to_string(config)?;
+        let status_str = serde_json::to_string(&status)?;
+        let status_str = status_str.trim_matches('"');
+        
+        sqlx::query(r#"
+            INSERT INTO processes (id, name, command, args, status, started_at, config, tmux_session)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                status = excluded.status,
+                tmux_session = excluded.tmux_session,
+                updated_at = CURRENT_TIMESTAMP
+        "#)
+        .bind(id.to_string())
+        .bind(name)
+        .bind(command)
+        .bind(args_json)
+        .bind(status_str)
+        .bind(Utc::now())
+        .bind(config_json)
+        .bind(tmux_session)
+        .execute(&self.db)
+        .await?;
+        
+        Ok(())
+    }
+    
+    pub async fn update_process_status(&self, id: &ProcessId, status: ProcessStatus, pid: Option<u32>) -> Result<()> {
+        let status_str = serde_json::to_string(&status)?;
+        let status_str = status_str.trim_matches('"');
+        
+        if status == ProcessStatus::Stopped || status == ProcessStatus::Failed {
+            sqlx::query(r#"
+                UPDATE processes 
+                SET status = ?, pid = ?, stopped_at = ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = ?
+            "#)
+            .bind(status_str)
+            .bind(pid.map(|p| p as i64))
+            .bind(Utc::now())
+            .bind(id.to_string())
+            .execute(&self.db)
+            .await?;
+        } else {
+            sqlx::query(r#"
+                UPDATE processes 
+                SET status = ?, pid = ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = ?
+            "#)
+            .bind(status_str)
+            .bind(pid.map(|p| p as i64))
+            .bind(id.to_string())
+            .execute(&self.db)
+            .await?;
+        }
+        
+        Ok(())
+    }
+    
+    pub async fn get_process(&self, id: &ProcessId) -> Result<Option<ProcessRecord>> {
+        let row = sqlx::query(
+            "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+             FROM processes WHERE id = ?"
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.db)
+        .await?;
+        
+        if let Some(row) = row {
+            Ok(Some(ProcessRecord::from_row(row)?))
+        } else {
+            Ok(None)
+        }
+    }
+    
+    pub async fn list_processes(&self, status_filter: Option<ProcessStatus>) -> Result<Vec<ProcessRecord>> {
+        let query = if let Some(status) = status_filter {
+            let status_str = serde_json::to_string(&status)?;
+            let status_str = status_str.trim_matches('"').to_string();
+            sqlx::query(
+                "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+                 FROM processes WHERE status = ? ORDER BY started_at DESC"
+            )
+            .bind(status_str)
+        } else {
+            sqlx::query(
+                "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+                 FROM processes ORDER BY started_at DESC"
+            )
+        };
+        
+        let rows = query.fetch_all(&self.db).await?;
+        let mut processes = Vec::new();
+        
+        for row in rows {
+            processes.push(ProcessRecord::from_row(row)?);
+        }
+        
+        Ok(processes)
+    }
+    
+    pub async fn delete_process(&self, id: &ProcessId) -> Result<()> {
+        sqlx::query("DELETE FROM processes WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&self.db)
+            .await?;
+        
+        Ok(())
+    }
+    
+    pub async fn increment_restart_count(&self, id: &ProcessId) -> Result<()> {
+        sqlx::query(
+            "UPDATE processes SET restart_count = restart_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+        )
+        .bind(id.to_string())
+        .execute(&self.db)
+        .await?;
+        
+        Ok(())
+    }
+    
+    pub async fn recover_orphaned_tmux_sessions(&self) -> Result<Vec<ProcessId>> {
+        use crate::tmux::TmuxManager;
+        
+        let mut recovered = Vec::new();
+        
+        // Get all known tmux sessions from DB
+        let known_sessions: Vec<String> = sqlx::query_scalar(
+            "SELECT tmux_session FROM processes WHERE tmux_session IS NOT NULL"
+        )
+        .fetch_all(&self.db)
+        .await?;
+        
+        // List all tmux sessions
+        if let Ok(tmux_sessions) = TmuxManager::list_sessions() {
+            for session in tmux_sessions {
+                if session.starts_with("apm-") && !known_sessions.contains(&session) {
+                    // Extract process ID from session name
+                    if let Some(uuid_str) = session.strip_prefix("apm-") {
+                        if let Ok(uuid) = uuid_str.parse::<uuid::Uuid>() {
+                            let process_id = ProcessId(uuid);
+                            
+                            // Try to get process info from tmux
+                            let pid = TmuxManager::get_session_pid(&session).ok();
+                            
+                            // Try to recover metadata from tmux session
+                            let name = TmuxManager::get_session_metadata(&session, "apm_process_name")
+                                .unwrap_or_else(|_| format!("recovered-{}", &uuid_str[..8]));
+                            let command = TmuxManager::get_session_metadata(&session, "apm_command")
+                                .unwrap_or_else(|_| "unknown".to_string());
+                            let args_json = TmuxManager::get_session_metadata(&session, "apm_args")
+                                .unwrap_or_else(|_| "[]".to_string());
+                            let args: Vec<String> = serde_json::from_str(&args_json).unwrap_or_default();
+                            
+                            // Create a process record with recovered metadata
+                            let config = ProcessConfig {
+                                name,
+                                command,
+                                args,
+                                cwd: None,
+                                env: std::collections::HashMap::new(),
+                                tags: vec!["recovered".to_string()],
+                                pty: false,
+                                use_tmux: true,
+                                restart_policy: Default::default(),
+                                resources: Default::default(),
+                            };
+                            
+                            // Store the recovered process
+                            self.store_process(
+                                &process_id,
+                                &config.name,
+                                &config.command,
+                                &config.args,
+                                ProcessStatus::Running,
+                                &config,
+                                Some(&session)
+                            ).await?;
+                            
+                            if let Some(pid) = pid {
+                                self.update_process_status(&process_id, ProcessStatus::Running, Some(pid)).await?;
+                            }
+                            
+                            recovered.push(process_id);
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(recovered)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessRecord {
+    pub id: ProcessId,
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub status: ProcessStatus,
+    pub started_at: DateTime<Utc>,
+    pub stopped_at: Option<DateTime<Utc>>,
+    pub pid: Option<u32>,
+    pub tmux_session: Option<String>,
+    pub restart_count: u32,
+    pub config: ProcessConfig,
+}
+
+impl ProcessRecord {
+    fn from_row(row: sqlx::sqlite::SqliteRow) -> Result<Self> {
+        use crate::ApmError;
+        
+        let id_str: String = row.try_get("id")?;
+        let id = ProcessId(id_str.parse().map_err(|_| ApmError::ProcessError("Invalid UUID".into()))?);
+        
+        let args_json: String = row.try_get("args")?;
+        let args: Vec<String> = serde_json::from_str(&args_json)?;
+        
+        let status_str: String = row.try_get("status")?;
+        let status: ProcessStatus = serde_json::from_str(&format!("\"{}\"", status_str))?;
+        
+        let config_json: String = row.try_get("config")?;
+        let config: ProcessConfig = serde_json::from_str(&config_json)?;
+        
+        let pid: Option<i64> = row.try_get("pid")?;
+        
+        Ok(ProcessRecord {
+            id,
+            name: row.try_get("name")?,
+            command: row.try_get("command")?,
+            args,
+            status,
+            started_at: row.try_get("started_at")?,
+            stopped_at: row.try_get("stopped_at")?,
+            pid: pid.map(|p| p as u32),
+            tmux_session: row.try_get("tmux_session")?,
+            restart_count: row.try_get::<i64, _>("restart_count")? as u32,
+            config,
+        })
     }
 }
 

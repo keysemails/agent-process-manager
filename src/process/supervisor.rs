@@ -2,13 +2,13 @@
 
 use super::{ProcessId, ProcessInfo, ProcessStatus};
 use super::health::HealthMonitor;
-use crate::{ApmError, Result, tmux::TmuxManager};
+use crate::{ApmError, Result, tmux::TmuxManager, logs::LogStorage};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{RwLock, Mutex};
+use tokio::sync::Mutex;
 use tracing::{error, info};
 
 fn default_true() -> bool {
@@ -72,13 +72,16 @@ pub struct Process {
 }
 
 pub struct ProcessManager {
-    processes: Arc<RwLock<HashMap<ProcessId, Arc<RwLock<Process>>>>>,
+    storage: Arc<LogStorage>,
     log_sender: tokio::sync::mpsc::Sender<(ProcessId, String)>,
     health_monitor: Arc<HealthMonitor>,
 }
 
 impl ProcessManager {
-    pub fn new(log_sender: tokio::sync::mpsc::Sender<(ProcessId, String)>) -> Self {
+    pub fn new(
+        storage: Arc<LogStorage>,
+        log_sender: tokio::sync::mpsc::Sender<(ProcessId, String)>
+    ) -> Self {
         let health_monitor = Arc::new(HealthMonitor::new());
         
         // Start the health monitoring background task
@@ -88,15 +91,27 @@ impl ProcessManager {
         });
         
         Self {
-            processes: Arc::new(RwLock::new(HashMap::new())),
+            storage,
             log_sender,
             health_monitor,
         }
     }
     
+    pub async fn initialize(&self) -> Result<()> {
+        // Recover any orphaned tmux sessions
+        let recovered = self.storage.recover_orphaned_tmux_sessions().await?;
+        if !recovered.is_empty() {
+            info!("Recovered {} orphaned tmux sessions", recovered.len());
+            for id in &recovered {
+                info!("  - Recovered process {}", id);
+            }
+        }
+        Ok(())
+    }
+    
     fn clone_for_restart(&self) -> Self {
         Self {
-            processes: self.processes.clone(),
+            storage: self.storage.clone(),
             log_sender: self.log_sender.clone(),
             health_monitor: self.health_monitor.clone(),
         }
@@ -107,11 +122,11 @@ impl ProcessManager {
         info!("Spawning process '{}' with ID {}", config.name, id);
 
         let process = if config.use_tmux && TmuxManager::is_available() {
-            self.spawn_with_tmux(id.clone(), config).await?
+            self.spawn_with_tmux(id.clone(), config.clone()).await?
         } else if config.pty {
-            self.spawn_with_pty(id.clone(), config).await?
+            self.spawn_with_pty(id.clone(), config.clone()).await?
         } else {
-            self.spawn_without_pty(id.clone(), config).await?
+            self.spawn_without_pty(id.clone(), config.clone()).await?
         };
 
         // Get initial health metrics if PID is available
@@ -141,11 +156,30 @@ impl ProcessManager {
             memory_mb,
         };
 
-        let process_arc = Arc::new(RwLock::new(process));
-        self.processes.write().await.insert(id.clone(), process_arc.clone());
+        // Store process in database
+        let tmux_session = if config.use_tmux && TmuxManager::is_available() {
+            Some(format!("apm-{}", id.0))
+        } else {
+            None
+        };
+        
+        self.storage.store_process(
+            &id,
+            &config.name,
+            &config.command,
+            &config.args,
+            process.status,
+            &config,
+            tmux_session.as_deref()
+        ).await?;
+        
+        // Update with PID if available
+        if let Some(pid) = process.pid {
+            self.storage.update_process_status(&id, process.status, Some(pid)).await?;
+        }
 
         // Start monitoring the process output
-        self.monitor_process_output(id.clone(), process_arc.clone()).await;
+        self.monitor_process_output(id.clone(), process).await;
         
         // Start monitoring process health
         if let Some(pid) = info.pid {
@@ -208,6 +242,12 @@ impl ProcessManager {
         if !TmuxManager::session_exists(&session_name) {
             return Err(ApmError::ProcessError("tmux session failed to start".to_string()));
         }
+        
+        // Store metadata in tmux session as backup
+        let _ = TmuxManager::set_session_metadata(&session_name, "apm_process_name", &config.name);
+        let _ = TmuxManager::set_session_metadata(&session_name, "apm_command", &config.command);
+        let _ = TmuxManager::set_session_metadata(&session_name, "apm_args", &serde_json::to_string(&config.args).unwrap_or_default());
+        let _ = TmuxManager::set_session_metadata(&session_name, "apm_process_id", &id.0.to_string());
         
         // Start monitoring the pipe in a separate task using blocking I/O
         let log_path_clone = log_path.clone();
@@ -340,166 +380,56 @@ impl ProcessManager {
     async fn monitor_process_output(
         &self,
         id: ProcessId,
-        process: Arc<RwLock<Process>>,
+        process: Process,
     ) {
         // Check if this is a tmux session
-        let is_tmux = {
-            let proc = process.read().await;
-            proc.tmux_session.is_some()
-        };
-        
-        if is_tmux {
+        if let Some(session_name) = &process.tmux_session {
             // For tmux sessions, monitoring is handled by the pipe-pane setup
-            // We just need to monitor if the session is still alive
-            let session_name = {
-                let proc = process.read().await;
-                proc.tmux_session.clone()
-            };
+            // Start a task to monitor session health
+            let session = session_name.clone();
+            let process_id = id.clone();
+            let storage = self.storage.clone();
             
-            if let Some(session) = session_name {
-                let processes = self.processes.clone();
-                let id_clone = id.clone();
-                
-                tokio::spawn(async move {
-                    loop {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                        
-                        if !TmuxManager::session_exists(&session) {
-                            info!("tmux session {} has ended", session);
-                            
-                            // Update process status
-                            if let Some(proc_arc) = processes.read().await.get(&id_clone) {
-                                let mut proc = proc_arc.write().await;
-                                proc.status = ProcessStatus::Stopped;
-                            }
-                            break;
-                        }
-                    }
-                });
-            }
-            return;
-        }
-        
-        // Original PTY monitoring code
-        let log_sender = self.log_sender.clone();
-        let processes = self.processes.clone();
-        let manager_ref = self.clone_for_restart();
-        
-        tokio::spawn(async move {
-            let reader = {
-                let proc = process.read().await;
-                match &proc.pty_master {
-                    Some(master) => {
-                        let master_guard = master.lock().await;
-                        master_guard.try_clone_reader()
-                    }
-                    None => {
-                        error!("No PTY master for process {}", id);
-                        return;
-                    }
-                }
-            };
-
-            let reader = match reader {
-                Ok(r) => r,
-                Err(e) => {
-                    error!("Failed to clone PTY reader: {}", e);
-                    return;
-                }
-            };
-
-            // Use a thread to bridge sync/async gap
-            let id_clone = id.clone();
-            let process_clone = process.clone();
-            let processes_clone = processes.clone();
-            let manager_for_restart = manager_ref;
-            std::thread::spawn(move || {
-                use std::io::{BufRead, BufReader};
-                let mut reader = BufReader::new(reader);
-                let mut line = String::new();
-                
+            tokio::spawn(async move {
                 loop {
-                    match reader.read_line(&mut line) {
-                        Ok(0) => {
-                            // EOF - process has exited
-                            info!("Process {} has exited (thread: {:?})", id_clone, std::thread::current().id());
-                            let rt = tokio::runtime::Runtime::new().unwrap();
-                            rt.block_on(async {
-                                let mut proc = process_clone.write().await;
-                                let prev_status = proc.status;
-                                proc.status = ProcessStatus::Stopped;
-                                
-                                info!("Process {} status changed from {:?} to Stopped", id_clone, prev_status);
-                                
-                                // Check if we need to restart
-                                if proc.config.restart_policy.enabled && 
-                                   proc.restart_count < proc.config.restart_policy.max_retries {
-                                    let restart_count = proc.restart_count;
-                                    let max_retries = proc.config.restart_policy.max_retries;
-                                    info!("Process {} will restart, current count: {}/{}", id_clone, restart_count, max_retries);
-                                    drop(proc); // Release lock before restart
-                                    
-                                    // Wait for backoff
-                                    let backoff = process_clone.read().await.config.restart_policy.backoff_ms;
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff)).await;
-                                    
-                                    // Attempt restart
-                                    match manager_for_restart.restart_process(&id_clone).await {
-                                        Ok(info) => {
-                                            info!("Process {} restarted successfully, new PID: {:?}, restart count: {}", 
-                                                  id_clone, info.pid, info.restart_count);
-                                        }
-                                        Err(e) => {
-                                            error!("Failed to restart process {}: {}", id_clone, e);
-                                            // Mark as failed if we can't restart
-                                            if let Some(proc_arc) = processes_clone.read().await.get(&id_clone) {
-                                                proc_arc.write().await.status = ProcessStatus::Failed;
-                                            }
-                                        }
-                                    }
-                                } else if proc.config.restart_policy.enabled {
-                                    // Max retries exceeded
-                                    info!("Process {} max retries exceeded, marking as failed", id_clone);
-                                    proc.status = ProcessStatus::Failed;
-                                }
-                            });
-                            break;
-                        }
-                        Ok(_) => {
-                            // Send log line to storage
-                            let line_to_send = line.clone();
-                            let id_for_send = id_clone.clone();
-                            let rt = tokio::runtime::Runtime::new().unwrap();
-                            if let Err(e) = rt.block_on(async {
-                                log_sender.send((id_for_send, line_to_send)).await
-                            }) {
-                                error!("Failed to send log line: {}", e);
-                            }
-                            line.clear();
-                        }
-                        Err(e) => {
-                            error!("Error reading from process {}: {}", id_clone, e);
-                            break;
-                        }
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    
+                    // Check if session still exists
+                    if !TmuxManager::session_exists(&session) {
+                        info!("Tmux session {} for process {} has ended", session, process_id);
+                        // Update process status in database
+                        let _ = storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await;
+                        break;
                     }
                 }
             });
-        });
+            return;
+        }
+        
+        // TODO: Implement PTY monitoring for non-tmux processes
+        // For now, we only support tmux-based processes
     }
+                
 
     pub async fn get_process(&self, id: &ProcessId) -> Result<ProcessInfo> {
-        let processes = self.processes.read().await;
-        let process = processes.get(id)
+        let process_record = self.storage.get_process(id).await?
             .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
         
-        let proc = process.read().await;
-        let uptime = chrono::Utc::now()
-            .signed_duration_since(proc.started_at)
-            .num_seconds() as u64;
+        let uptime = if process_record.status == ProcessStatus::Running {
+            chrono::Utc::now()
+                .signed_duration_since(process_record.started_at)
+                .num_seconds() as u64
+        } else if let Some(stopped_at) = process_record.stopped_at {
+            stopped_at
+                .signed_duration_since(process_record.started_at)
+                .num_seconds() as u64
+        } else {
+            0
+        };
 
         // Get current health metrics
-        let (cpu_percent, memory_mb) = if let Some(_pid) = proc.pid {
-            if let Some(health) = self.health_monitor.get_health(&proc.id).await {
+        let (cpu_percent, memory_mb) = if let Some(_pid) = process_record.pid {
+            if let Some(health) = self.health_monitor.get_health(id).await {
                 (Some(health.cpu_percent), Some(health.memory_mb))
             } else {
                 (None, None)
@@ -509,30 +439,37 @@ impl ProcessManager {
         };
         
         Ok(ProcessInfo {
-            id: proc.id.clone(),
-            name: proc.config.name.clone(),
-            command: proc.config.command.clone(),
-            args: proc.config.args.clone(),
-            status: proc.status,
-            pid: proc.pid,
-            started_at: proc.started_at,
+            id: process_record.id.clone(),
+            name: process_record.config.name.clone(),
+            command: process_record.config.command.clone(),
+            args: process_record.config.args.clone(),
+            status: process_record.status,
+            pid: process_record.pid,
+            started_at: process_record.started_at,
             uptime_seconds: uptime,
-            restart_count: proc.restart_count,
-            tags: proc.config.tags.clone(),
+            restart_count: process_record.restart_count,
+            tags: process_record.config.tags.clone(),
             cpu_percent,
             memory_mb,
         })
     }
 
     pub async fn list_processes(&self) -> Result<Vec<ProcessInfo>> {
-        let processes = self.processes.read().await;
+        let process_records = self.storage.list_processes(None).await?;
         let mut infos = Vec::new();
 
-        for (_, process) in processes.iter() {
-            let proc = process.read().await;
-            let uptime = chrono::Utc::now()
-                .signed_duration_since(proc.started_at)
-                .num_seconds() as u64;
+        for proc in process_records {
+            let uptime = if proc.status == ProcessStatus::Running {
+                chrono::Utc::now()
+                    .signed_duration_since(proc.started_at)
+                    .num_seconds() as u64
+            } else if let Some(stopped_at) = proc.stopped_at {
+                stopped_at
+                    .signed_duration_since(proc.started_at)
+                    .num_seconds() as u64
+            } else {
+                0
+            };
 
             // Get current health metrics
             let (cpu_percent, memory_mb) = if let Some(_pid) = proc.pid {
@@ -565,48 +502,83 @@ impl ProcessManager {
     }
 
     pub async fn stop_process(&self, id: &ProcessId) -> Result<()> {
-        let processes = self.processes.read().await;
-        let process = processes.get(id)
+        let process_record = self.storage.get_process(id).await?
             .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
 
-        let mut proc = process.write().await;
-        proc.status = ProcessStatus::Stopping;
+        // Update status to stopping
+        self.storage.update_process_status(id, ProcessStatus::Stopping, process_record.pid).await?;
 
-        if let Some(mut child) = proc.child.take() {
-            child.kill()
-                .map_err(|e| ApmError::Process(format!("Failed to kill process: {}", e)))?;
+        // Handle tmux session termination
+        if let Some(tmux_session) = &process_record.tmux_session {
+            use crate::tmux::TmuxManager;
+            TmuxManager::kill_session(tmux_session)?;
+        } else if let Some(pid) = process_record.pid {
+            // For non-tmux processes, try to kill by PID
+            use std::process::Command;
+            let _ = Command::new("kill")
+                .arg(pid.to_string())
+                .output();
         }
 
-        proc.status = ProcessStatus::Stopped;
+        // Update status to stopped
+        self.storage.update_process_status(id, ProcessStatus::Stopped, process_record.pid).await?;
+        
+        // Remove from health monitor
+        self.health_monitor.remove_process(id).await;
+        
         Ok(())
     }
 
     pub async fn restart_process(&self, id: &ProcessId) -> Result<ProcessInfo> {
+        use crate::tmux::TmuxManager;
+        
+        // Get the existing process config
+        let process_record = self.storage.get_process(id).await?
+            .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
+        
+        let old_restart_count = process_record.restart_count;
+        let config = process_record.config.clone();
+        
+        // Stop the existing process
         self.stop_process(id).await?;
         
-        let (config, old_restart_count) = {
-            let processes = self.processes.read().await;
-            let process = processes.get(id)
-                .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
-            let proc = process.read().await;
-            (proc.config.clone(), proc.restart_count)
-        };
+        // Increment restart count in database
+        self.storage.increment_restart_count(id).await?;
 
-        // Create new process with same ID
-        let process = if config.pty {
-            self.spawn_with_pty(id.clone(), config).await?
+        // Create new process with same config
+        let process = if config.use_tmux && TmuxManager::is_available() {
+            self.spawn_with_tmux(id.clone(), config.clone()).await?
+        } else if config.pty {
+            self.spawn_with_pty(id.clone(), config.clone()).await?
         } else {
-            self.spawn_without_pty(id.clone(), config).await?
+            self.spawn_without_pty(id.clone(), config.clone()).await?
         };
         
-        // Update restart count
-        let mut process = process;
-        process.restart_count = old_restart_count + 1;
+        // Update process in database with new status and PID
+        let tmux_session = if config.use_tmux && TmuxManager::is_available() {
+            Some(format!("apm-{}", id.0))
+        } else {
+            None
+        };
+        
+        self.storage.store_process(
+            id,
+            &config.name,
+            &config.command,
+            &config.args,
+            process.status,
+            &config,
+            tmux_session.as_deref()
+        ).await?;
+        
+        if let Some(pid) = process.pid {
+            self.storage.update_process_status(id, process.status, Some(pid)).await?;
+        }
         
         // Get initial health metrics if PID is available
         let (cpu_percent, memory_mb) = if let Some(pid) = process.pid {
-            self.health_monitor.update_health(&id, pid).await;
-            if let Some(health) = self.health_monitor.get_health(&id).await {
+            self.health_monitor.update_health(id, pid).await;
+            if let Some(health) = self.health_monitor.get_health(id).await {
                 (Some(health.cpu_percent), Some(health.memory_mb))
             } else {
                 (None, None)
@@ -617,26 +589,21 @@ impl ProcessManager {
         
         let info = ProcessInfo {
             id: id.clone(),
-            name: process.config.name.clone(),
-            command: process.config.command.clone(),
-            args: process.config.args.clone(),
+            name: config.name.clone(),
+            command: config.command.clone(),
+            args: config.args.clone(),
             status: process.status,
             pid: process.pid,
             started_at: process.started_at,
             uptime_seconds: 0,
-            restart_count: process.restart_count,
-            tags: process.config.tags.clone(),
+            restart_count: old_restart_count + 1,
+            tags: config.tags.clone(),
             cpu_percent,
             memory_mb,
         };
 
-        let process_arc = Arc::new(RwLock::new(process));
-        
-        // Update the existing process in the map
-        self.processes.write().await.insert(id.clone(), process_arc.clone());
-
         // Start monitoring the process output
-        self.monitor_process_output(id.clone(), process_arc.clone()).await;
+        self.monitor_process_output(id.clone(), process).await;
         
         // Start monitoring process health
         if let Some(pid) = info.pid {
@@ -648,37 +615,32 @@ impl ProcessManager {
 
     pub async fn get_pty_master(
         &self,
-        id: &ProcessId,
+        _id: &ProcessId,
     ) -> Result<Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>> {
-        let processes = self.processes.read().await;
-        let process = processes.get(id)
-            .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
-        
-        let proc = process.read().await;
-        Ok(proc.pty_master.clone())
+        // Since we're using database storage, PTY masters are not persisted
+        // This method should return None for database-backed processes
+        // In the future, we could implement a PTY registry if needed
+        Ok(None)
     }
     
     pub async fn get_tmux_session(
         &self,
         id: &ProcessId,
     ) -> Result<Option<String>> {
-        let processes = self.processes.read().await;
-        let process = processes.get(id)
+        let process_record = self.storage.get_process(id).await?
             .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
         
-        let proc = process.read().await;
-        Ok(proc.tmux_session.clone())
+        Ok(process_record.tmux_session)
     }
     
     pub async fn cleanup_tmux_sessions(&self) -> Result<()> {
-        let processes = self.processes.read().await;
-        for (id, process) in processes.iter() {
-            let proc = process.read().await;
+        use crate::tmux::TmuxManager;
+        
+        let stopped_processes = self.storage.list_processes(Some(ProcessStatus::Stopped)).await?;
+        for proc in stopped_processes {
             if let Some(session) = &proc.tmux_session {
-                if proc.status == ProcessStatus::Stopped {
-                    info!("Cleaning up tmux session {} for stopped process {}", session, id);
-                    let _ = TmuxManager::kill_session(session);
-                }
+                info!("Cleaning up tmux session {} for stopped process {}", session, proc.id);
+                let _ = TmuxManager::kill_session(session);
             }
         }
         Ok(())

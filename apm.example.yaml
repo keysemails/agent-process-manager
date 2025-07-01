@@ -38,3 +38,11 @@ attach:
   default_size:
     rows: 40
     cols: 120
+
+# MCP (Model Context Protocol) server settings
+mcp:
+  enabled: false         # Enable MCP server alongside HTTP API
+  transport: "tcp"       # "tcp" or "unix_socket"
+  tcp_host: "127.0.0.1"  # TCP bind address
+  tcp_port: 7338         # TCP port (pairs with HTTP 7337)
+  unix_socket: "/tmp/apm.sock"  # Unix socket path

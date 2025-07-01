@@ -18,7 +18,9 @@
       "WebFetch(domain:github.com)",
       "Bash(cargo metadata:*)",
       "Bash(cargo fetch:*)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(awk:*)",
+      "Bash(cat:*)"
     ],
     "deny": []
   }
