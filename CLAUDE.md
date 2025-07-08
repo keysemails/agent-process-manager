@@ -104,13 +104,42 @@ apm status                         # Check daemon status
 
 # Process Management
 apm spawn <name> <command> [args]  # Start a process (uses tmux by default)
-apm list                          # List all processes
-apm logs <name>                   # View process logs
-apm stop <name>                   # Stop a process
-apm restart <name>                # Restart a process
+apm list                          # List processes visible from current directory
+apm list --all                    # List all processes regardless of directory
+apm logs <name>                   # View process logs (from current directory)
+apm logs <name> --all             # View logs of any process
+apm stop <name>                   # Stop a process (from current directory)
+apm stop <name> --all             # Stop any process
+apm restart <name>                # Restart a process (from current directory)
+apm restart <name> --all          # Restart any process
 
 # Interactive
 apm attach <name>                 # Attach to process (uses tmux attach)
+```
+
+## Working Directory-Based Process Isolation
+
+APM uses a simplified authentication model based on working directories:
+- Processes are automatically tagged with the directory they were spawned from
+- By default, you can only see and manage processes spawned from your current directory
+- Use the `--all` flag to bypass this isolation and access all processes
+- MCP clients also respect this isolation based on their working directory
+
+### Access Groups
+- Each process has an `access_group` based on the canonical path: `dir:/absolute/path/to/directory`
+- Processes without an access_group are globally accessible (legacy/recovered processes)
+- The access group is determined at spawn time and cannot be changed
+
+### Examples
+```bash
+# In /home/user/project1
+apm spawn web python app.py       # Tagged with dir:/home/user/project1
+apm list                          # Shows only processes from project1
+
+# In /home/user/project2
+apm list                          # Shows only processes from project2
+apm list --all                    # Shows all processes from all directories
+apm stop web --all                # Can stop the web process from project1
 ```
 
 ## Development Guidelines
@@ -166,6 +195,15 @@ Or use environment variables:
 APM_MCP_ENABLED=1
 APM_MCP_TRANSPORT=tcp
 APM_MCP_TCP_PORT=7338
+```
+
+### MCP Working Directory Isolation
+
+MCP clients automatically inherit working directory-based isolation:
+- The MCP server determines the client's working directory at runtime
+- All MCP operations (spawn, list, logs, stop) respect this isolation
+- Processes spawned via MCP are tagged with the client's working directory
+- MCP clients can only see/manage processes from their working directory
 
 ### Adding New Features
 

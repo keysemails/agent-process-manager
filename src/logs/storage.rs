@@ -113,6 +113,7 @@ impl LogStorage {
                 tmux_session TEXT,
                 restart_count INTEGER DEFAULT 0,
                 config TEXT NOT NULL,  -- Full ProcessConfig as JSON
+                access_group TEXT,  -- Working directory based access group
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
@@ -120,6 +121,7 @@ impl LogStorage {
             CREATE INDEX IF NOT EXISTS idx_processes_status ON processes(status);
             CREATE INDEX IF NOT EXISTS idx_processes_name ON processes(name);
             CREATE INDEX IF NOT EXISTS idx_processes_tmux ON processes(tmux_session);
+            CREATE INDEX IF NOT EXISTS idx_processes_access_group ON processes(access_group);
             
             -- Trigger to update updated_at on changes
             CREATE TRIGGER IF NOT EXISTS update_processes_timestamp 
@@ -381,11 +383,12 @@ impl LogStorage {
         let status_str = status_str.trim_matches('"');
         
         sqlx::query(r#"
-            INSERT INTO processes (id, name, command, args, status, started_at, config, tmux_session)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO processes (id, name, command, args, status, started_at, config, tmux_session, access_group)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
                 tmux_session = excluded.tmux_session,
+                access_group = excluded.access_group,
                 updated_at = CURRENT_TIMESTAMP
         "#)
         .bind(id.to_string())
@@ -396,6 +399,7 @@ impl LogStorage {
         .bind(Utc::now())
         .bind(config_json)
         .bind(tmux_session)
+        .bind(&config.access_group)
         .execute(&self.db)
         .await?;
         
@@ -476,6 +480,52 @@ impl LogStorage {
         Ok(processes)
     }
     
+    pub async fn list_processes_with_access_filter(&self, access_group: Option<&str>, status_filter: Option<ProcessStatus>) -> Result<Vec<ProcessRecord>> {
+        let query = match (access_group, status_filter) {
+            (Some(group), Some(status)) => {
+                let status_str = serde_json::to_string(&status)?;
+                let status_str = status_str.trim_matches('"').to_string();
+                sqlx::query(
+                    "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+                     FROM processes WHERE access_group = ? AND status = ? ORDER BY started_at DESC"
+                )
+                .bind(group)
+                .bind(status_str)
+            }
+            (Some(group), None) => {
+                sqlx::query(
+                    "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+                     FROM processes WHERE access_group = ? ORDER BY started_at DESC"
+                )
+                .bind(group)
+            }
+            (None, Some(status)) => {
+                let status_str = serde_json::to_string(&status)?;
+                let status_str = status_str.trim_matches('"').to_string();
+                sqlx::query(
+                    "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+                     FROM processes WHERE status = ? ORDER BY started_at DESC"
+                )
+                .bind(status_str)
+            }
+            (None, None) => {
+                sqlx::query(
+                    "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+                     FROM processes ORDER BY started_at DESC"
+                )
+            }
+        };
+        
+        let rows = query.fetch_all(&self.db).await?;
+        let mut processes = Vec::new();
+        
+        for row in rows {
+            processes.push(ProcessRecord::from_row(row)?);
+        }
+        
+        Ok(processes)
+    }
+    
     pub async fn delete_process(&self, id: &ProcessId) -> Result<()> {
         sqlx::query("DELETE FROM processes WHERE id = ?")
             .bind(id.to_string())
@@ -541,6 +591,7 @@ impl LogStorage {
                                 use_tmux: true,
                                 restart_policy: Default::default(),
                                 resources: Default::default(),
+                                access_group: None, // No access group for recovered sessions
                             };
                             
                             // Store the recovered process
