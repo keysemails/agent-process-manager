@@ -34,6 +34,7 @@ pub mod test_utils {
             tags: vec![],
             cpu_percent: Some(0.0),
             memory_mb: Some(0),
+            access_group: None,
         }
     }
 
@@ -50,6 +51,7 @@ pub mod test_utils {
             use_tmux: false,
             restart_policy: RestartPolicy::default(),
             resources: ResourceLimits::default(),
+            access_group: None,
         }
     }
 

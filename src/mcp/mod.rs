@@ -103,6 +103,30 @@ impl McpServerHandler {
     fn create_text_content(text: String) -> Content {
         Content::text(text)
     }
+    
+    /// Check if the current access group has hierarchical access to a process
+    fn has_hierarchical_access(current_access_group: &Option<String>, process_access_group: &Option<String>) -> bool {
+        // If process has no access group, it's globally accessible
+        if process_access_group.is_none() {
+            return true;
+        }
+        
+        // Both must have access groups for comparison
+        let (Some(current), Some(process)) = (current_access_group, process_access_group) else {
+            return false;
+        };
+        
+        // Extract paths from access groups
+        let Some(current_path) = crate::utils::path_from_access_group(current) else {
+            return false;
+        };
+        let Some(process_path) = crate::utils::path_from_access_group(process) else {
+            return false;
+        };
+        
+        // Check if current directory is an ancestor of process directory
+        crate::utils::is_ancestor_path(&current_path, &process_path)
+    }
 
     fn create_error_result(message: String) -> CallToolResult {
         CallToolResult {
@@ -174,7 +198,7 @@ impl McpServerHandler {
 
         match self.process_manager.list_processes().await {
             Ok(processes) => {
-                // Filter processes by access group
+                // Filter processes by access group with hierarchical access
                 let filtered_processes: Vec<_> = processes
                     .into_iter()
                     .filter(|p| {
@@ -182,8 +206,9 @@ impl McpServerHandler {
                         if access_group.is_none() {
                             return true;
                         }
-                        // Show processes with matching access group or no access group
-                        p.access_group.is_none() || p.access_group == access_group
+                        
+                        // Use hierarchical access checking
+                        Self::has_hierarchical_access(&access_group, &p.access_group)
                     })
                     .collect();
                 
@@ -238,8 +263,8 @@ impl McpServerHandler {
         // Check if process exists and is accessible
         match self.process_manager.get_process(&process_id).await {
             Ok(process_info) => {
-                // Check access permissions
-                if access_group.is_some() && process_info.access_group.is_some() && process_info.access_group != access_group {
+                // Check access permissions using hierarchical access
+                if !Self::has_hierarchical_access(&access_group, &process_info.access_group) {
                     return Self::create_error_result(format!("Access denied: process '{}' is not accessible from this directory", process_id));
                 }
                 
@@ -305,8 +330,8 @@ impl McpServerHandler {
         // Check if process exists and is accessible
         match self.process_manager.get_process(&process_id).await {
             Ok(process_info) => {
-                // Check access permissions
-                if access_group.is_some() && process_info.access_group.is_some() && process_info.access_group != access_group {
+                // Check access permissions using hierarchical access
+                if !Self::has_hierarchical_access(&access_group, &process_info.access_group) {
                     return Self::create_error_result(format!("Access denied: process '{}' is not accessible from this directory", process_id));
                 }
                 
@@ -367,7 +392,7 @@ impl McpServerHandler {
         
         let all_processes = self.process_manager.list_processes().await?;
         
-        // Filter processes by access group
+        // Filter processes by access group with hierarchical access
         let processes: Vec<_> = all_processes
             .into_iter()
             .filter(|p| {
@@ -375,8 +400,8 @@ impl McpServerHandler {
                 if access_group.is_none() {
                     return true;
                 }
-                // Show processes with matching access group or no access group
-                p.access_group.is_none() || p.access_group == access_group
+                // Use hierarchical access checking
+                Self::has_hierarchical_access(&access_group, &p.access_group)
             })
             .collect();
         
@@ -402,7 +427,7 @@ impl McpServerHandler {
         let mut all_errors = Vec::new();
         let all_processes = self.process_manager.list_processes().await?;
         
-        // Filter processes by access group
+        // Filter processes by access group with hierarchical access
         let processes: Vec<_> = all_processes
             .into_iter()
             .filter(|p| {
@@ -410,8 +435,8 @@ impl McpServerHandler {
                 if access_group.is_none() {
                     return true;
                 }
-                // Show processes with matching access group or no access group
-                p.access_group.is_none() || p.access_group == access_group
+                // Use hierarchical access checking
+                Self::has_hierarchical_access(&access_group, &p.access_group)
             })
             .collect();
 

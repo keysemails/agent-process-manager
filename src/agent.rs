@@ -31,7 +31,9 @@ impl AgentContext {
     }
     
     /// Check if this context can access a process with the given access group
+    /// Uses hierarchical access: parent directories can access subdirectory processes
     pub fn can_access(&self, process_access_group: &Option<String>) -> bool {
+        
         // Superusers can access everything
         if self.is_superuser && self.access_groups.is_empty() {
             return true;
@@ -42,7 +44,25 @@ impl AgentContext {
             return true;
         };
         
-        // Check if any of our access groups match
-        self.access_groups.contains(process_group)
+        // Extract path from process access group
+        let Some(process_path) = crate::utils::path_from_access_group(process_group) else {
+            // Invalid access group format, deny access
+            return false;
+        };
+        
+        // Check if any of our access groups give us access
+        for our_group in &self.access_groups {
+            // Extract our path
+            let Some(our_path) = crate::utils::path_from_access_group(our_group) else {
+                continue;
+            };
+            
+            // Check if we're in an ancestor directory (hierarchical access)
+            if crate::utils::is_ancestor_path(&our_path, &process_path) {
+                return true;
+            }
+        }
+        
+        false
     }
 }

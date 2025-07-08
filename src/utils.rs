@@ -36,6 +36,25 @@ pub fn access_group_from_dir(dir: &Path) -> String {
     format!("dir:{}", normalized.display())
 }
 
+/// Check if ancestor_path is an ancestor directory of descendant_path
+/// Returns true if ancestor is a parent directory of descendant
+pub fn is_ancestor_path(ancestor: &Path, descendant: &Path) -> bool {
+    // Normalize both paths to handle .. and . components
+    let ancestor_normalized = normalize_path(ancestor);
+    let descendant_normalized = normalize_path(descendant);
+    
+    // Check if descendant starts with ancestor
+    descendant_normalized.starts_with(&ancestor_normalized)
+}
+
+/// Extract the path from an access group string
+/// Returns None if the access group is not in the expected format
+pub fn path_from_access_group(access_group: &str) -> Option<PathBuf> {
+    access_group
+        .strip_prefix("dir:")
+        .map(|path_str| PathBuf::from(path_str))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,5 +79,62 @@ mod tests {
         let access_group = access_group_from_dir(dir);
         assert!(access_group.starts_with("dir:"));
         assert!(access_group.contains("projects"));
+    }
+    
+    #[test]
+    fn test_is_ancestor_path() {
+        // Direct parent-child relationship
+        assert!(is_ancestor_path(
+            Path::new("/home/user/projects"),
+            Path::new("/home/user/projects/backend")
+        ));
+        
+        // Grandparent relationship
+        assert!(is_ancestor_path(
+            Path::new("/home/user"),
+            Path::new("/home/user/projects/backend/src")
+        ));
+        
+        // Same path should return true (a directory is its own ancestor)
+        assert!(is_ancestor_path(
+            Path::new("/home/user/projects"),
+            Path::new("/home/user/projects")
+        ));
+        
+        // Not an ancestor
+        assert!(!is_ancestor_path(
+            Path::new("/home/user/projects/backend"),
+            Path::new("/home/user/projects/frontend")
+        ));
+        
+        // Completely different paths
+        assert!(!is_ancestor_path(
+            Path::new("/home/user"),
+            Path::new("/var/log")
+        ));
+        
+        // Child is not ancestor of parent
+        assert!(!is_ancestor_path(
+            Path::new("/home/user/projects/backend"),
+            Path::new("/home/user/projects")
+        ));
+    }
+    
+    #[test]
+    fn test_path_from_access_group() {
+        // Valid access group
+        let access_group = "dir:/home/user/projects";
+        let path = path_from_access_group(access_group);
+        assert_eq!(path, Some(PathBuf::from("/home/user/projects")));
+        
+        // Invalid access group (no prefix)
+        let access_group = "/home/user/projects";
+        let path = path_from_access_group(access_group);
+        assert_eq!(path, None);
+        
+        // Invalid access group (wrong prefix)
+        let access_group = "file:/home/user/projects";
+        let path = path_from_access_group(access_group);
+        assert_eq!(path, None);
     }
 }

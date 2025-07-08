@@ -170,6 +170,25 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+/// Check if the current access group has hierarchical access to a process
+fn has_hierarchical_access_cli(current_group: &str, process_group: Option<&str>) -> bool {
+    // If process has no access group, it's globally accessible
+    let Some(process_group) = process_group else {
+        return true;
+    };
+    
+    // Extract paths from access groups
+    let Some(current_path) = agent_process_manager::utils::path_from_access_group(current_group) else {
+        return false;
+    };
+    let Some(process_path) = agent_process_manager::utils::path_from_access_group(process_group) else {
+        return false;
+    };
+    
+    // Check if current directory is an ancestor of process directory
+    agent_process_manager::utils::is_ancestor_path(&current_path, &process_path)
+}
+
 async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
     info!("Starting Agent Process Manager daemon...");
 
@@ -358,10 +377,8 @@ async fn list_processes_cli(show_all: bool) -> anyhow::Result<()> {
             for process in processes {
                 // Filter by access group if not showing all
                 if let Some(ref group) = access_group {
-                    if let Some(proc_group) = process["access_group"].as_str() {
-                        if proc_group != group {
-                            continue;
-                        }
+                    if !has_hierarchical_access_cli(group, process["access_group"].as_str()) {
+                        continue;
                     }
                 }
                 
@@ -418,11 +435,7 @@ async fn show_logs_cli(name: String, errors_only: bool, _follow: bool, show_all:
                 }
                 // Check access group if not showing all
                 if let Some(ref group) = access_group {
-                    if let Some(proc_group) = p["access_group"].as_str() {
-                        proc_group == group
-                    } else {
-                        true // Process without access group is accessible to all
-                    }
+                    has_hierarchical_access_cli(group, p["access_group"].as_str())
                 } else {
                     true
                 }
@@ -618,11 +631,7 @@ async fn stop_process_cli(name: String, show_all: bool) -> anyhow::Result<()> {
                 }
                 // Check access group if not showing all
                 if let Some(ref group) = access_group {
-                    if let Some(proc_group) = p["access_group"].as_str() {
-                        proc_group == group
-                    } else {
-                        true // Process without access group is accessible to all
-                    }
+                    has_hierarchical_access_cli(group, p["access_group"].as_str())
                 } else {
                     true
                 }
@@ -693,11 +702,7 @@ async fn restart_process_cli(name: String, show_all: bool) -> anyhow::Result<()>
                 }
                 // Check access group if not showing all
                 if let Some(ref group) = access_group {
-                    if let Some(proc_group) = p["access_group"].as_str() {
-                        proc_group == group
-                    } else {
-                        true // Process without access group is accessible to all
-                    }
+                    has_hierarchical_access_cli(group, p["access_group"].as_str())
                 } else {
                     true
                 }

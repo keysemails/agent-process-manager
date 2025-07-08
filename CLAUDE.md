@@ -119,11 +119,16 @@ apm attach <name>                 # Attach to process (uses tmux attach)
 
 ## Working Directory-Based Process Isolation
 
-APM uses a simplified authentication model based on working directories:
+APM uses a simplified authentication model based on working directories with hierarchical access:
 - Processes are automatically tagged with the directory they were spawned from
-- By default, you can only see and manage processes spawned from your current directory
+- Parent directories can see and manage processes from their subdirectories
 - Use the `--all` flag to bypass this isolation and access all processes
 - MCP clients also respect this isolation based on their working directory
+
+### Hierarchical Access Model
+- **Parent directories** can access processes from their subdirectories
+- **Sibling directories** cannot access each other's processes
+- **Child directories** cannot access parent directory processes
 
 ### Access Groups
 - Each process has an `access_group` based on the canonical path: `dir:/absolute/path/to/directory`
@@ -132,15 +137,32 @@ APM uses a simplified authentication model based on working directories:
 
 ### Examples
 ```bash
-# In /home/user/project1
-apm spawn web python app.py       # Tagged with dir:/home/user/project1
-apm list                          # Shows only processes from project1
+# Project structure:
+# /home/user/myproject/
+# ├── backend/
+# └── frontend/
 
-# In /home/user/project2
-apm list                          # Shows only processes from project2
-apm list --all                    # Shows all processes from all directories
-apm stop web --all                # Can stop the web process from project1
+# In /home/user/myproject/backend
+apm spawn api python api.py       # Tagged with dir:/home/user/myproject/backend
+
+# In /home/user/myproject/frontend  
+apm spawn web npm start           # Tagged with dir:/home/user/myproject/frontend
+apm list                          # Shows only 'web' (frontend process)
+apm list --all                    # Shows all processes
+
+# In /home/user/myproject (parent directory)
+apm list                          # Shows both 'api' and 'web' (hierarchical access!)
+apm stop api                      # Can stop the backend API
+apm logs web                      # Can view frontend logs
+
+# In /home/user (grandparent)
+apm list                          # Shows all processes under /home/user
 ```
+
+### Use Cases
+- **Monorepo Management**: From the project root, manage all service processes
+- **Service Isolation**: Each service directory sees only its own processes
+- **Development Workflow**: Work in subdirectories while monitoring from project root
 
 ## Development Guidelines
 
@@ -199,11 +221,12 @@ APM_MCP_TCP_PORT=7338
 
 ### MCP Working Directory Isolation
 
-MCP clients automatically inherit working directory-based isolation:
+MCP clients automatically inherit working directory-based isolation with hierarchical access:
 - The MCP server determines the client's working directory at runtime
-- All MCP operations (spawn, list, logs, stop) respect this isolation
-- Processes spawned via MCP are tagged with the client's working directory
-- MCP clients can only see/manage processes from their working directory
+- All MCP operations (spawn, list, logs, stop) respect hierarchical access rules
+- Processes spawned via MCP are tagged with the server's working directory
+- MCP clients in parent directories can manage subdirectory processes
+- Example: An MCP client in `/project` can manage processes from `/project/backend`
 
 ### Adding New Features
 
