@@ -34,7 +34,6 @@ pub struct ProcessConfig {
     pub restart_policy: RestartPolicy,
     #[serde(default)]
     pub resources: ResourceLimits,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub access_group: Option<String>,
 }
 
