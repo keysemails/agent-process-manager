@@ -2,7 +2,7 @@
 
 use crate::{
     process::{ProcessConfig, ProcessId, ProcessManager, ProcessStatus},
-    logs::{LogStorage, LogQuery, LogFormat},
+    logs::{LogStorage, LogQuery, LogFormat, LogSearchEngine, SearchQuery},
 };
 use axum::{
     extract::{Extension, Path, Query},
@@ -931,4 +931,18 @@ pub async fn get_capabilities() -> impl IntoResponse {
     });
     
     Json(ApiResponse::success(capabilities))
+}
+
+// Full-text search endpoint
+pub async fn search_logs(
+    Extension(search_engine): Extension<Arc<LogSearchEngine>>,
+    Json(query): Json<SearchQuery>,
+) -> impl IntoResponse {
+    match search_engine.search(query).await {
+        Ok(results) => (StatusCode::OK, Json(ApiResponse::success(results))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<serde_json::Value>::error(e.to_string())),
+        ).into_response(),
+    }
 }

@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use tokio::sync::RwLock;
 use std::sync::Arc;
 use super::patterns::{PatternDetector, DetectedPattern};
+use super::search::LogSearchEngine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -52,12 +53,17 @@ pub struct LogStorage {
     db: SqlitePool,
     pattern_detector: Arc<PatternDetector>,
     raw_buffers: Arc<RwLock<HashMap<ProcessId, VecDeque<String>>>>,
+    search_engine: Option<Arc<LogSearchEngine>>,
 }
 
 use std::collections::HashMap;
 
 impl LogStorage {
     pub async fn new(database_url: &str) -> Result<Self> {
+        Self::new_with_search(database_url, None).await
+    }
+    
+    pub async fn new_with_search(database_url: &str, search_engine: Option<Arc<LogSearchEngine>>) -> Result<Self> {
         // Ensure SQLite creates the database file if it doesn't exist
         let db_url = if database_url.starts_with("sqlite:") && !database_url.contains("?") {
             format!("{}?mode=rwc", database_url)
@@ -137,6 +143,7 @@ impl LogStorage {
             db,
             pattern_detector: Arc::new(PatternDetector::new()),
             raw_buffers: Arc::new(RwLock::new(HashMap::new())),
+            search_engine,
         })
     }
 
@@ -168,7 +175,7 @@ impl LogStorage {
         let patterns_json = serde_json::to_string(&patterns)?;
         let timestamp = Utc::now();
         
-        sqlx::query(r#"
+        let result = sqlx::query(r#"
             INSERT INTO logs (process_id, timestamp, raw_line, clean_line, patterns, level)
             VALUES (?, ?, ?, ?, ?, ?)
         "#)
@@ -180,6 +187,24 @@ impl LogStorage {
         .bind(format!("{:?}", level))
         .execute(&self.db)
         .await?;
+
+        // Index the log entry if search engine is available
+        if let Some(search_engine) = &self.search_engine {
+            let log_entry = LogEntry {
+                id: result.last_insert_rowid(),
+                process_id: process_id.clone(),
+                timestamp,
+                raw_line: raw_line.clone(),
+                clean_line,
+                patterns,
+                level,
+            };
+            
+            // Index asynchronously - don't fail the store operation if indexing fails
+            if let Err(e) = search_engine.index_log(&log_entry).await {
+                tracing::warn!("Failed to index log entry: {}", e);
+            }
+        }
 
         Ok(())
     }
@@ -617,6 +642,23 @@ impl LogStorage {
         }
         
         Ok(recovered)
+    }
+    
+    /// Commit the search index to make recent logs searchable
+    pub async fn commit_search_index(&self) -> Result<()> {
+        if let Some(search_engine) = &self.search_engine {
+            search_engine.commit().await?;
+        }
+        Ok(())
+    }
+    
+    /// Get statistics about the search index
+    pub async fn get_search_stats(&self) -> Result<Option<super::search::IndexStats>> {
+        if let Some(search_engine) = &self.search_engine {
+            Ok(Some(search_engine.get_stats().await?))
+        } else {
+            Ok(None)
+        }
     }
 }
 

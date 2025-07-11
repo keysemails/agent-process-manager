@@ -1,11 +1,11 @@
 //! Agent Process Manager CLI and daemon
 
 use agent_process_manager::{
-    api, config::Config, logs::LogStorage, process::ProcessManager, mcp::start_mcp_server,
+    api, config::Config, logs::{LogStorage, LogSearchEngine}, process::ProcessManager, mcp::start_mcp_server,
 };
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
-use tracing::{info, error};
+use tracing::{info, error, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -191,9 +191,27 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
         }
     };
 
-    // Initialize storage
+    // Initialize search engine if enabled in config
+    let search_engine = if config.search.enabled {
+        info!("Initializing full-text search engine at {}...", config.search.index_path);
+        match LogSearchEngine::new_with_config(&config.search.index_path, config.search.buffer_size_mb).await {
+            Ok(engine) => {
+                info!("Search engine initialized successfully");
+                Some(Arc::new(engine))
+            }
+            Err(e) => {
+                warn!("Failed to initialize search engine: {}. Search will be disabled.", e);
+                None
+            }
+        }
+    } else {
+        info!("Search engine disabled in configuration");
+        None
+    };
+
+    // Initialize storage with optional search engine
     let log_storage = Arc::new(
-        LogStorage::new(&config.storage.database_url).await?
+        LogStorage::new_with_search(&config.storage.database_url, search_engine.clone()).await?
     );
 
     // Create log channel
@@ -233,7 +251,7 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
     };
 
     // Create router
-    let app = api::create_router(process_manager, log_storage);
+    let app = api::create_router(process_manager, log_storage, search_engine);
 
     // Start HTTP server
     let addr = format!("{}:{}", config.server.host, config.server.port);

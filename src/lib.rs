@@ -40,8 +40,14 @@ pub enum ApmError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     
+    #[error("IO error: {0}")]
+    IoError(String),
+    
     #[error("Pattern error: {0}")]
     Pattern(#[from] regex::Error),
+    
+    #[error("Search error: {0}")]
+    SearchError(String),
     
     #[error("Not found: {0}")]
     NotFound(String),

@@ -11,8 +11,10 @@ pub enum DetectedPattern {
     IpAddress(String),
     BuildTime(f64),
     Error(String),
+    ErrorPattern(String),
     KeyEvent(String),
     FilePath(String),
+    EmailAddress(String),
 }
 
 pub struct PatternDetector {

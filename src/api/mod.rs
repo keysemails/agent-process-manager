@@ -3,7 +3,7 @@
 mod handlers;
 mod websocket;
 
-use crate::{process::ProcessManager, logs::LogStorage};
+use crate::{process::ProcessManager, logs::{LogStorage, LogSearchEngine}};
 use axum::{
     Router,
     routing::{get, post, delete},
@@ -17,8 +17,9 @@ pub use handlers::create_process;
 pub fn create_router(
     process_manager: Arc<ProcessManager>,
     log_storage: Arc<LogStorage>,
+    search_engine: Option<Arc<LogSearchEngine>>,
 ) -> Router {
-    Router::new()
+    let mut router = Router::new()
         // Process management
         .route("/api/processes", post(handlers::create_process))
         .route("/api/processes", get(handlers::list_processes))
@@ -46,6 +47,14 @@ pub fn create_router(
         
         // Add shared state
         .layer(Extension(process_manager))
-        .layer(Extension(log_storage))
-        .layer(CorsLayer::permissive())
+        .layer(Extension(log_storage));
+
+    // Add search route and engine only if search engine is available
+    if let Some(engine) = search_engine {
+        router = router
+            .route("/api/logs/search", post(handlers::search_logs))
+            .layer(Extension(engine));
+    }
+    
+    router.layer(CorsLayer::permissive())
 }

@@ -80,6 +80,9 @@ strip-ansi-escapes = "0.2"
 # ratatui = "0.28"
 crossterm = "0.28"
 
+# Full-text search
+tantivy = "0.22"
+
 # MCP (Model Context Protocol) support
 [dependencies.rmcp]
 git = "https://github.com/modelcontextprotocol/rust-sdk"

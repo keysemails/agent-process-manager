@@ -1,0 +1,52 @@
+# APM Configuration Example
+# Copy this to apm.yaml and customize as needed
+
+# HTTP Server Configuration
+server:
+  host: "0.0.0.0"
+  port: 7337
+
+# Database and Storage
+storage:
+  database_url: "sqlite:apm.db"
+  log_retention_days: 7
+  max_log_size_mb: 1000
+
+# UI Configuration
+ui:
+  theme: "dark"
+  dashboard_auth: "none"
+
+# Process Access Control
+access_control:
+  # Options: open, strict, unrestricted
+  mode: "open"
+
+# MCP Server (for AI agents)
+mcp:
+  enabled: false
+  transport: "tcp"
+  tcp_host: "127.0.0.1"
+  tcp_port: 7338
+  unix_socket: "/tmp/apm.sock"
+
+# Full-Text Search Configuration
+search:
+  # Enable/disable search indexing (default: true)
+  enabled: true
+  
+  # Directory for search index files
+  index_path: "./apm_search_index"
+  
+  # How often to commit search index (seconds)
+  commit_interval_seconds: 5
+  
+  # Index writer buffer size in MB (higher = more memory, faster indexing)
+  buffer_size_mb: 50
+
+# Custom Pattern Detection (optional)
+patterns:
+  custom: []
+    # - name: "custom_error"
+    #   pattern: "FATAL:.*"
+    #   severity: "critical"
