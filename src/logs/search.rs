@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tantivy::{
     collector::{Count, TopDocs},
     directory::MmapDirectory,
-    query::QueryParser,
+    query::{BooleanQuery, Occur, Query, QueryParser, TermQuery},
     schema::{Field, Schema, TextFieldIndexing, TextOptions, Value, FAST, STORED, TEXT},
     DateTime as TantivyDateTime,
     doc, Index, IndexReader, IndexWriter, Term, TantivyDocument,
@@ -126,8 +126,15 @@ impl LogSchema {
         // Log ID - stored for reference back to SQLite
         let log_id = schema_builder.add_i64_field("log_id", STORED);
 
-        // Process ID - stored and indexed for exact matching
-        let process_id = schema_builder.add_text_field("process_id", TEXT | STORED);
+        // Process ID - stored and indexed for exact matching (no tokenization)
+        let process_id_options = TextOptions::default()
+            .set_indexing_options(
+                TextFieldIndexing::default()
+                    .set_tokenizer("raw")  // Use raw tokenizer for exact matching
+                    .set_index_option(tantivy::schema::IndexRecordOption::Basic)
+            )
+            .set_stored();
+        let process_id = schema_builder.add_text_field("process_id", process_id_options);
 
         // Message - full-text searchable with positions for highlighting
         let message_indexing = TextFieldIndexing::default()
@@ -205,6 +212,9 @@ impl LogSearchEngine {
         
         let index = Index::open_or_create(directory, schema.schema.clone())
             .map_err(|e| ApmError::SearchError(format!("Failed to create index: {}", e)))?;
+        
+        // Register the raw tokenizer for exact matching
+        index.tokenizers().register("raw", tantivy::tokenizer::RawTokenizer::default());
 
         // Create writer with configured buffer size
         let buffer_bytes = buffer_size_mb * 1_000_000;
@@ -268,7 +278,7 @@ impl LogSearchEngine {
         }
 
         // Add document to index
-        let mut writer = self.writer.lock().await;
+        let writer = self.writer.lock().await;
         writer
             .add_document(doc)
             .map_err(|e| ApmError::SearchError(format!("Failed to add document: {}", e)))?;
@@ -278,7 +288,7 @@ impl LogSearchEngine {
 
     /// Index multiple log entries in batch for better performance
     pub async fn index_logs_batch(&self, logs: &[LogEntry]) -> Result<()> {
-        let mut writer = self.writer.lock().await;
+        let writer = self.writer.lock().await;
         
         for log in logs {
             let mut doc = TantivyDocument::new();
@@ -343,9 +353,19 @@ impl LogSearchEngine {
             .parse_query(&query.query)
             .map_err(|e| ApmError::SearchError(format!("Failed to parse query: {}", e)))?;
 
-        // For now, use the parsed query directly
-        // TODO: Add proper boolean query building for filters
-        let final_query = parsed_query;
+        // Build the final query with filters
+        let final_query: Box<dyn Query> = if let Some(ref process_id) = query.process_id {
+            // Create a boolean query that combines the text query with process_id filter
+            let process_term = Term::from_field_text(self.schema.process_id, &process_id.to_string());
+            let process_query = TermQuery::new(process_term, Default::default());
+            
+            Box::new(BooleanQuery::new(vec![
+                (Occur::Must, parsed_query),
+                (Occur::Must, Box::new(process_query)),
+            ]))
+        } else {
+            parsed_query
+        };
 
         // Execute search
         let searcher = self.reader.searcher();
