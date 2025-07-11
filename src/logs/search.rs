@@ -184,6 +184,11 @@ pub struct LogSearchEngine {
 impl LogSearchEngine {
     /// Create a new search engine with the specified index directory
     pub async fn new<P: AsRef<Path>>(index_path: P) -> Result<Self> {
+        Self::new_with_config(index_path, 50).await
+    }
+    
+    /// Create a new search engine with custom buffer size
+    pub async fn new_with_config<P: AsRef<Path>>(index_path: P, buffer_size_mb: usize) -> Result<Self> {
         let index_path = index_path.as_ref().to_path_buf();
         
         // Create index directory if it doesn't exist
@@ -201,9 +206,10 @@ impl LogSearchEngine {
         let index = Index::open_or_create(directory, schema.schema.clone())
             .map_err(|e| ApmError::SearchError(format!("Failed to create index: {}", e)))?;
 
-        // Create writer with 50MB heap
+        // Create writer with configured buffer size
+        let buffer_bytes = buffer_size_mb * 1_000_000;
         let writer = index
-            .writer(50_000_000)
+            .writer(buffer_bytes)
             .map_err(|e| ApmError::SearchError(format!("Failed to create index writer: {}", e)))?;
 
         // Create reader

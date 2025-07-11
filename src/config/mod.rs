@@ -12,6 +12,8 @@ pub struct Config {
     pub mcp: McpConfig,
     #[serde(default)]
     pub access_control: AccessControlConfig,
+    #[serde(default)]
+    pub search: SearchConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -106,6 +108,33 @@ impl Default for AccessControlConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SearchConfig {
+    /// Enable full-text search indexing
+    #[serde(default = "default_search_enabled")]
+    pub enabled: bool,
+    /// Path to search index directory
+    #[serde(default = "default_search_index_path")]
+    pub index_path: String,
+    /// How often to commit search index (seconds)
+    #[serde(default = "default_search_commit_interval")]
+    pub commit_interval_seconds: u64,
+    /// Index writer buffer size in MB
+    #[serde(default = "default_search_buffer_size")]
+    pub buffer_size_mb: usize,
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,  // Default to enabled
+            index_path: "./apm_search_index".to_string(),
+            commit_interval_seconds: 5,
+            buffer_size_mb: 50,
+        }
+    }
+}
+
 fn default_mcp_transport() -> McpTransport {
     McpTransport::Tcp
 }
@@ -124,6 +153,22 @@ fn default_unix_socket() -> String {
 
 fn default_access_control_mode() -> AccessControlMode {
     AccessControlMode::Open
+}
+
+fn default_search_enabled() -> bool {
+    true
+}
+
+fn default_search_index_path() -> String {
+    "./apm_search_index".to_string()
+}
+
+fn default_search_commit_interval() -> u64 {
+    5
+}
+
+fn default_search_buffer_size() -> usize {
+    50
 }
 
 impl Default for Config {
@@ -153,6 +198,7 @@ impl Default for Config {
                 unix_socket: "/tmp/apm.sock".to_string(),
             },
             access_control: AccessControlConfig::default(),
+            search: SearchConfig::default(),
         }
     }
 }
@@ -180,6 +226,10 @@ impl Config {
             .set_default("mcp.tcp_port", 7338)?
             .set_default("mcp.unix_socket", "/tmp/apm.sock")?
             .set_default("access_control.mode", "open")?
+            .set_default("search.enabled", true)?
+            .set_default("search.index_path", "./apm_search_index")?
+            .set_default("search.commit_interval_seconds", 5)?
+            .set_default("search.buffer_size_mb", 50)?
             .add_source(config::File::from(std::path::Path::new("apm.yaml")).required(false))
             .add_source(config::Environment::with_prefix("APM"))
             .build()?;

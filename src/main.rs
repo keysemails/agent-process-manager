@@ -191,10 +191,10 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
         }
     };
 
-    // Initialize search engine (optional)
-    let search_engine = if std::env::var("APM_ENABLE_SEARCH").is_ok() {
-        info!("Initializing full-text search engine...");
-        match LogSearchEngine::new("./apm_search_index").await {
+    // Initialize search engine if enabled in config
+    let search_engine = if config.search.enabled {
+        info!("Initializing full-text search engine at {}...", config.search.index_path);
+        match LogSearchEngine::new_with_config(&config.search.index_path, config.search.buffer_size_mb).await {
             Ok(engine) => {
                 info!("Search engine initialized successfully");
                 Some(Arc::new(engine))
@@ -205,6 +205,7 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
             }
         }
     } else {
+        info!("Search engine disabled in configuration");
         None
     };
 
