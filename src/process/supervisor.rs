@@ -67,7 +67,9 @@ pub struct Process {
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub restart_count: u32,
     pub pid: Option<u32>,
+    #[allow(dead_code)]
     pty_master: Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>,
+    #[allow(dead_code)]
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     tmux_session: Option<String>,
 }
@@ -110,6 +112,7 @@ impl ProcessManager {
         Ok(())
     }
     
+    #[allow(dead_code)]
     fn clone_for_restart(&self) -> Self {
         Self {
             storage: self.storage.clone(),

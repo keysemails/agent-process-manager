@@ -56,7 +56,7 @@ pub mod test_utils {
     }
 
     /// Creates sample log entries for testing
-    pub fn create_test_log_entries(process_id: &str, count: usize) -> Vec<LogEntry> {
+    pub fn create_test_log_entries(_process_id: &str, count: usize) -> Vec<LogEntry> {
         let pid = ProcessId::new();
         (0..count)
             .map(|i| LogEntry {

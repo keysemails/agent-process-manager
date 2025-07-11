@@ -22,6 +22,7 @@ pub struct PatternDetector {
 }
 
 struct CompiledPattern {
+    #[allow(dead_code)]
     name: &'static str,
     regex: Regex,
     extractor: Box<dyn Fn(&regex::Captures) -> Option<DetectedPattern> + Send + Sync>,

@@ -175,6 +175,7 @@ impl LogSchema {
 /// High-performance search engine for log entries
 pub struct LogSearchEngine {
     /// Tantivy index
+    #[allow(dead_code)]
     index: Index,
     /// Schema definition
     schema: LogSchema,
@@ -460,6 +461,8 @@ impl LogSearchEngine {
         let mut writer = self.writer.lock().await;
         let term = Term::from_field_text(self.schema.process_id, &process_id.to_string());
         writer.delete_term(term);
+        writer.commit()
+            .map_err(|e| ApmError::SearchError(format!("Failed to commit deletion: {}", e)))?;
         Ok(())
     }
 
