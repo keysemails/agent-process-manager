@@ -34,6 +34,7 @@ pub struct ProcessConfig {
     pub restart_policy: RestartPolicy,
     #[serde(default)]
     pub resources: ResourceLimits,
+    pub access_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +155,7 @@ impl ProcessManager {
             tags: process.config.tags.clone(),
             cpu_percent,
             memory_mb,
+            access_group: process.config.access_group.clone(),
         };
 
         // Store process in database
@@ -451,6 +453,7 @@ impl ProcessManager {
             tags: process_record.config.tags.clone(),
             cpu_percent,
             memory_mb,
+            access_group: process_record.config.access_group.clone(),
         })
     }
 
@@ -495,6 +498,7 @@ impl ProcessManager {
                 tags: proc.config.tags.clone(),
                 cpu_percent,
                 memory_mb,
+                access_group: proc.config.access_group.clone(),
             });
         }
 
@@ -600,6 +604,7 @@ impl ProcessManager {
             tags: config.tags.clone(),
             cpu_percent,
             memory_mb,
+            access_group: config.access_group.clone(),
         };
 
         // Start monitoring the process output

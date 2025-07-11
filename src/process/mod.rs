@@ -38,6 +38,8 @@ pub struct ProcessInfo {
     pub tags: Vec<String>,
     pub cpu_percent: Option<f32>,
     pub memory_mb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

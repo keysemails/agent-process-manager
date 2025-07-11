@@ -34,6 +34,7 @@ pub struct McpServer {
 pub(crate) struct McpServerHandler {
     pub process_manager: Arc<ProcessManager>,
     pub log_storage: Arc<LogStorage>,
+    pub config: crate::config::Config,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -72,10 +73,12 @@ impl McpServer {
     pub async fn new(
         process_manager: Arc<ProcessManager>,
         log_storage: Arc<LogStorage>,
+        config: crate::config::Config,
     ) -> Result<Self> {
         let handler = McpServerHandler {
             process_manager,
             log_storage,
+            config,
         };
         Ok(Self { handler })
     }
@@ -103,6 +106,7 @@ impl McpServerHandler {
     fn create_text_content(text: String) -> Content {
         Content::text(text)
     }
+    
 
     fn create_error_result(message: String) -> CallToolResult {
         CallToolResult {
@@ -121,6 +125,15 @@ impl McpServerHandler {
     async fn handle_spawn(&self, args: SpawnArgs) -> CallToolResult {
         debug!("MCP spawn tool called: {:?}", args);
 
+        // Get the current working directory for access control
+        let access_group = match std::env::current_dir() {
+            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+            Err(e) => {
+                error!("Failed to get current directory: {}", e);
+                None
+            }
+        };
+
         let config = ProcessConfig {
             name: args.name.clone(),
             command: args.command,
@@ -132,6 +145,7 @@ impl McpServerHandler {
             use_tmux: true,
             restart_policy: Default::default(),
             resources: Default::default(),
+            access_group,
         };
 
         match self.process_manager.spawn_process(config).await {
@@ -153,9 +167,37 @@ impl McpServerHandler {
     async fn handle_list(&self) -> CallToolResult {
         debug!("MCP list tool called");
 
+        // Get the current working directory for access control
+        let access_group = match std::env::current_dir() {
+            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+            Err(e) => {
+                error!("Failed to get current directory: {}", e);
+                None
+            }
+        };
+
         match self.process_manager.list_processes().await {
             Ok(processes) => {
-                let process_list: Vec<Value> = processes
+                // Filter processes by access group with configurable read access
+                let filtered_processes: Vec<_> = processes
+                    .into_iter()
+                    .filter(|p| {
+                        // If no access group (superuser), show all
+                        if access_group.is_none() {
+                            return true;
+                        }
+                        
+                        // Use new check_access function for read operation
+                        crate::utils::check_access(
+                            access_group.as_deref(),
+                            p.access_group.as_deref(),
+                            false,  // read operation
+                            &self.config.access_control.mode
+                        )
+                    })
+                    .collect();
+                
+                let process_list: Vec<Value> = filtered_processes
                     .into_iter()
                     .map(|info| {
                         json!({
@@ -194,36 +236,64 @@ impl McpServerHandler {
             }
         };
 
-        let query = LogQuery {
-            process_id: process_id.clone(),
-            format: LogFormat::Json,
-            lines: Some(args.limit),
-            search: None,
-            level: None,
-            since: None,
+        // Get the current working directory for access control
+        let access_group = match std::env::current_dir() {
+            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+            Err(e) => {
+                error!("Failed to get current directory: {}", e);
+                None
+            }
         };
 
-        match self.log_storage.query(query).await {
-            Ok(logs) => {
-                let log_entries: Vec<Value> = logs
-                    .into_iter()
-                    .map(|entry| {
-                        json!({
-                            "timestamp": entry.timestamp,
-                            "line": entry.raw_line,
-                            "level": entry.level,
-                            "patterns": entry.patterns
-                        })
-                    })
-                    .collect();
+        // Check if process exists and is accessible
+        match self.process_manager.get_process(&process_id).await {
+            Ok(process_info) => {
+                // Check access permissions using configurable read access
+                if !crate::utils::check_access(
+                    access_group.as_deref(),
+                    process_info.access_group.as_deref(),
+                    false,  // read operation
+                    &self.config.access_control.mode
+                ) {
+                    return Self::create_error_result(format!("Access denied: process '{}' is not accessible from this directory", process_id));
+                }
+                
+                let query = LogQuery {
+                    process_id: process_id.clone(),
+                    format: LogFormat::Json,
+                    lines: Some(args.limit),
+                    search: None,
+                    level: None,
+                    since: None,
+                };
 
-                Self::create_success_result(
-                    serde_json::to_string_pretty(&log_entries).unwrap_or_else(|_| "[]".to_string()),
-                )
+                match self.log_storage.query(query).await {
+                    Ok(logs) => {
+                        let log_entries: Vec<Value> = logs
+                            .into_iter()
+                            .map(|entry| {
+                                json!({
+                                    "timestamp": entry.timestamp,
+                                    "line": entry.raw_line,
+                                    "level": entry.level,
+                                    "patterns": entry.patterns
+                                })
+                            })
+                            .collect();
+
+                        Self::create_success_result(
+                            serde_json::to_string_pretty(&log_entries).unwrap_or_else(|_| "[]".to_string()),
+                        )
+                    }
+                    Err(e) => {
+                        error!("Failed to get logs: {}", e);
+                        Self::create_error_result(format!("Failed to get logs: {}", e))
+                    }
+                }
             }
             Err(e) => {
-                error!("Failed to get logs: {}", e);
-                Self::create_error_result(format!("Failed to get logs: {}", e))
+                error!("Failed to get process info: {}", e);
+                Self::create_error_result(format!("Process not found: {}", e))
             }
         }
     }
@@ -238,17 +308,46 @@ impl McpServerHandler {
             }
         };
 
-        match self.process_manager.stop_process(&process_id).await {
-            Ok(()) => {
-                let response = json!({
-                    "success": true,
-                    "message": format!("Process '{}' stopped successfully", process_id)
-                });
-                Self::create_success_result(response.to_string())
+        // Get the current working directory for access control
+        let access_group = match std::env::current_dir() {
+            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+            Err(e) => {
+                error!("Failed to get current directory: {}", e);
+                None
+            }
+        };
+
+        // Check if process exists and is accessible
+        match self.process_manager.get_process(&process_id).await {
+            Ok(process_info) => {
+                // Check access permissions - WRITE operation always requires hierarchical access
+                if !crate::utils::check_access(
+                    access_group.as_deref(),
+                    process_info.access_group.as_deref(),
+                    true,   // write operation
+                    &self.config.access_control.mode
+                ) {
+                    return Self::create_error_result(format!("Access denied: process '{}' is not accessible from this directory", process_id));
+                }
+                
+                // Stop the process
+                match self.process_manager.stop_process(&process_id).await {
+                    Ok(()) => {
+                        let response = json!({
+                            "success": true,
+                            "message": format!("Process '{}' stopped successfully", process_id)
+                        });
+                        Self::create_success_result(response.to_string())
+                    }
+                    Err(e) => {
+                        error!("Failed to stop process: {}", e);
+                        Self::create_error_result(format!("Failed to stop process: {}", e))
+                    }
+                }
             }
             Err(e) => {
-                error!("Failed to stop process: {}", e);
-                Self::create_error_result(format!("Failed to stop process: {}", e))
+                error!("Failed to get process info: {}", e);
+                Self::create_error_result(format!("Process not found: {}", e))
             }
         }
     }
@@ -277,7 +376,35 @@ impl McpServerHandler {
 
     // Helper methods
     async fn query_system_overview(&self) -> Result<Value> {
-        let processes = self.process_manager.list_processes().await?;
+        // Get the current working directory for access control
+        let access_group = match std::env::current_dir() {
+            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+            Err(e) => {
+                error!("Failed to get current directory: {}", e);
+                None
+            }
+        };
+        
+        let all_processes = self.process_manager.list_processes().await?;
+        
+        // Filter processes by access group with hierarchical access
+        let processes: Vec<_> = all_processes
+            .into_iter()
+            .filter(|p| {
+                // If no access group (superuser), show all
+                if access_group.is_none() {
+                    return true;
+                }
+                // Use configurable access checking for read operation
+                crate::utils::check_access(
+                    access_group.as_deref(),
+                    p.access_group.as_deref(),
+                    false,  // read operation
+                    &self.config.access_control.mode
+                )
+            })
+            .collect();
+        
         let overview = json!({
             "total_processes": processes.len(),
             "running": processes.iter().filter(|p| p.status == crate::process::ProcessStatus::Running).count(),
@@ -288,8 +415,35 @@ impl McpServerHandler {
     }
 
     async fn query_process_errors(&self, _time_window: Option<String>) -> Result<Value> {
+        // Get the current working directory for access control
+        let access_group = match std::env::current_dir() {
+            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+            Err(e) => {
+                error!("Failed to get current directory: {}", e);
+                None
+            }
+        };
+        
         let mut all_errors = Vec::new();
-        let processes = self.process_manager.list_processes().await?;
+        let all_processes = self.process_manager.list_processes().await?;
+        
+        // Filter processes by access group with hierarchical access
+        let processes: Vec<_> = all_processes
+            .into_iter()
+            .filter(|p| {
+                // If no access group (superuser), show all
+                if access_group.is_none() {
+                    return true;
+                }
+                // Use configurable access checking for read operation
+                crate::utils::check_access(
+                    access_group.as_deref(),
+                    p.access_group.as_deref(),
+                    false,  // read operation
+                    &self.config.access_control.mode
+                )
+            })
+            .collect();
 
         for process in processes {
             let query = LogQuery {

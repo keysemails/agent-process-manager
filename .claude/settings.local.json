@@ -20,7 +20,8 @@
       "Bash(cargo fetch:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(awk:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(sqlite3:*)"
     ],
     "deny": []
   }

@@ -9,6 +9,8 @@ pub mod logs;
 pub mod process;
 pub mod tmux;
 pub mod mcp;
+pub mod utils;
+pub mod agent;
 
 #[cfg(test)]
 pub mod test_utils;

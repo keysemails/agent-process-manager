@@ -10,6 +10,8 @@ pub struct Config {
     #[serde(default)]
     pub patterns: PatternConfig,
     pub mcp: McpConfig,
+    #[serde(default)]
+    pub access_control: AccessControlConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -72,6 +74,38 @@ pub struct McpConfig {
     pub unix_socket: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum AccessControlMode {
+    /// Open read access, hierarchical write access (default)
+    Open,
+    /// Both read and write require hierarchical access
+    Strict,
+    /// Full read/write access to all processes regardless of directory
+    Unrestricted,
+}
+
+impl Default for AccessControlMode {
+    fn default() -> Self {
+        AccessControlMode::Open
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AccessControlConfig {
+    /// Access control mode
+    #[serde(default = "default_access_control_mode")]
+    pub mode: AccessControlMode,
+}
+
+impl Default for AccessControlConfig {
+    fn default() -> Self {
+        Self {
+            mode: AccessControlMode::default(),
+        }
+    }
+}
+
 fn default_mcp_transport() -> McpTransport {
     McpTransport::Tcp
 }
@@ -86,6 +120,10 @@ fn default_tcp_port() -> u16 {
 
 fn default_unix_socket() -> String {
     "/tmp/apm.sock".to_string()
+}
+
+fn default_access_control_mode() -> AccessControlMode {
+    AccessControlMode::Open
 }
 
 impl Default for Config {
@@ -114,6 +152,7 @@ impl Default for Config {
                 tcp_port: 7338,
                 unix_socket: "/tmp/apm.sock".to_string(),
             },
+            access_control: AccessControlConfig::default(),
         }
     }
 }
@@ -140,6 +179,7 @@ impl Config {
             .set_default("mcp.tcp_host", "127.0.0.1")?
             .set_default("mcp.tcp_port", 7338)?
             .set_default("mcp.unix_socket", "/tmp/apm.sock")?
+            .set_default("access_control.mode", "open")?
             .add_source(config::File::from(std::path::Path::new("apm.yaml")).required(false))
             .add_source(config::Environment::with_prefix("APM"))
             .build()?;

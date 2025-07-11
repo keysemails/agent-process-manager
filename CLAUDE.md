@@ -104,14 +104,102 @@ apm status                         # Check daemon status
 
 # Process Management
 apm spawn <name> <command> [args]  # Start a process (uses tmux by default)
-apm list                          # List all processes
-apm logs <name>                   # View process logs
-apm stop <name>                   # Stop a process
-apm restart <name>                # Restart a process
+apm list                          # List processes visible from current directory
+apm list --all                    # List all processes regardless of directory
+apm logs <name>                   # View process logs (from current directory)
+apm logs <name> --all             # View logs of any process
+apm stop <name>                   # Stop a process (from current directory)
+apm stop <name> --all             # Stop any process
+apm restart <name>                # Restart a process (from current directory)
+apm restart <name> --all          # Restart any process
 
 # Interactive
 apm attach <name>                 # Attach to process (uses tmux attach)
 ```
+
+## Working Directory-Based Process Isolation
+
+APM uses a simplified authentication model based on working directories with hierarchical access:
+- Processes are automatically tagged with the directory they were spawned from
+- Parent directories can see and manage processes from their subdirectories
+- Use the `--all` flag to bypass this isolation and access all processes
+- MCP clients also respect this isolation based on their working directory
+
+### Hierarchical Access Model
+- **Parent directories** can access processes from their subdirectories
+- **Sibling directories** cannot access each other's processes
+- **Child directories** cannot access parent directory processes
+
+### Access Groups
+- Each process has an `access_group` based on the canonical path: `dir:/absolute/path/to/directory`
+- Processes without an access_group are globally accessible (legacy/recovered processes)
+- The access group is determined at spawn time and cannot be changed
+
+### Examples
+```bash
+# Project structure:
+# /home/user/myproject/
+# ├── backend/
+# └── frontend/
+
+# In /home/user/myproject/backend
+apm spawn api python api.py       # Tagged with dir:/home/user/myproject/backend
+
+# In /home/user/myproject/frontend  
+apm spawn web npm start           # Tagged with dir:/home/user/myproject/frontend
+apm list                          # Shows only 'web' (frontend process)
+apm list --all                    # Shows all processes
+
+# In /home/user/myproject (parent directory)
+apm list                          # Shows both 'api' and 'web' (hierarchical access!)
+apm stop api                      # Can stop the backend API
+apm logs web                      # Can view frontend logs
+
+# In /home/user (grandparent)
+apm list                          # Shows all processes under /home/user
+```
+
+### Use Cases
+- **Monorepo Management**: From the project root, manage all service processes
+- **Service Isolation**: Each service directory sees only its own processes
+- **Development Workflow**: Work in subdirectories while monitoring from project root
+
+### Configurable Access Control Modes
+
+APM supports three access control modes that can be configured in `apm.yaml`:
+
+1. **Open Mode** (`mode: "open"`) - Default and recommended for most users
+   - **Read operations** (list, logs): Can see all processes regardless of directory
+   - **Write operations** (stop, restart, attach): Require hierarchical access
+   - Best for collaborative development and debugging
+   - Better observability - agents can see what ports are in use system-wide
+
+2. **Strict Mode** (`mode: "strict"`) - For high-security environments
+   - Both read and write operations require hierarchical access
+   - Provides complete isolation between directory contexts
+
+3. **Unrestricted Mode** (`mode: "unrestricted"`) - For admin environments
+   - Full read/write access to all processes regardless of directory structure
+   - Bypasses all hierarchical access controls
+   - Useful for administrative tools and monitoring systems
+
+#### Configuration Examples
+
+```yaml
+# Default open mode (recommended)
+access_control:
+  mode: "open"
+
+# Strict security mode
+access_control:
+  mode: "strict"
+
+# Unrestricted admin mode
+access_control:
+  mode: "unrestricted"
+```
+
+The `--all` flag bypasses access control modes for superuser access in CLI commands.
 
 ## Development Guidelines
 
@@ -166,6 +254,16 @@ Or use environment variables:
 APM_MCP_ENABLED=1
 APM_MCP_TRANSPORT=tcp
 APM_MCP_TCP_PORT=7338
+```
+
+### MCP Working Directory Isolation
+
+MCP clients automatically inherit working directory-based isolation with hierarchical access:
+- The MCP server determines the client's working directory at runtime
+- All MCP operations (spawn, list, logs, stop) respect hierarchical access rules
+- Processes spawned via MCP are tagged with the server's working directory
+- MCP clients in parent directories can manage subdirectory processes
+- Example: An MCP client in `/project` can manage processes from `/project/backend`
 
 ### Adding New Features
 

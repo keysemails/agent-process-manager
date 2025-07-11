@@ -46,7 +46,11 @@ enum Commands {
     },
     
     /// List all processes
-    List,
+    List {
+        /// Show all processes regardless of working directory
+        #[arg(long)]
+        all: bool,
+    },
     
     /// Show process logs
     Logs {
@@ -58,6 +62,9 @@ enum Commands {
         /// Follow log output
         #[arg(short, long)]
         follow: bool,
+        /// Access logs from any directory
+        #[arg(long)]
+        all: bool,
     },
     
     /// Attach to a process (like tmux attach)
@@ -76,12 +83,18 @@ enum Commands {
     Stop {
         /// Process name or ID
         name: String,
+        /// Stop process from any directory
+        #[arg(long)]
+        all: bool,
     },
     
     /// Restart a process
     Restart {
         /// Process name or ID
         name: String,
+        /// Restart process from any directory
+        #[arg(long)]
+        all: bool,
     },
     
     /// Bridge stdio to MCP TCP server
@@ -126,13 +139,13 @@ async fn main() -> anyhow::Result<()> {
             init_default_logging();
             start_process_cli(name, command, args, tag, pty).await
         }
-        Commands::List => {
+        Commands::List { all } => {
             init_default_logging();
-            list_processes_cli().await
+            list_processes_cli(all).await
         }
-        Commands::Logs { name, errors, follow } => {
+        Commands::Logs { name, errors, follow, all } => {
             init_default_logging();
-            show_logs_cli(name, errors, follow).await
+            show_logs_cli(name, errors, follow, all).await
         }
         Commands::Attach { name, read_only } => {
             init_default_logging();
@@ -142,13 +155,13 @@ async fn main() -> anyhow::Result<()> {
             init_default_logging();
             show_status_cli().await
         }
-        Commands::Stop { name } => {
+        Commands::Stop { name, all } => {
             init_default_logging();
-            stop_process_cli(name).await
+            stop_process_cli(name, all).await
         }
-        Commands::Restart { name } => {
+        Commands::Restart { name, all } => {
             init_default_logging();
-            restart_process_cli(name).await
+            restart_process_cli(name, all).await
         }
         Commands::McpBridge { host, port } => {
             // Don't initialize logging for bridge mode - we need clean stdio
@@ -156,6 +169,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 }
+
 
 async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
     info!("Starting Agent Process Manager daemon...");
@@ -207,9 +221,10 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
         let mcp_manager = process_manager.clone();
         let mcp_storage = log_storage.clone();
         let mcp_config = config.mcp.clone();
+        let full_config = config.clone();
         
         Some(tokio::spawn(async move {
-            if let Err(e) = start_mcp_server(mcp_manager, mcp_storage, mcp_config).await {
+            if let Err(e) = start_mcp_server(mcp_manager, mcp_storage, mcp_config, full_config).await {
                 error!("MCP server error: {}", e);
             }
         }))
@@ -276,6 +291,15 @@ async fn start_process_cli(
         std::process::exit(1);
     }
     
+    // Get the current working directory for access control
+    let access_group = match std::env::current_dir() {
+        Ok(cwd) => Some(agent_process_manager::utils::access_group_from_dir(&cwd)),
+        Err(e) => {
+            eprintln!("Warning: Failed to get current directory: {}", e);
+            None
+        }
+    };
+    
     let config = agent_process_manager::process::ProcessConfig {
         name: name.clone(),
         command,
@@ -287,6 +311,7 @@ async fn start_process_cli(
         use_tmux: true, // Use tmux by default
         restart_policy: Default::default(),
         resources: Default::default(),
+        access_group,
     };
 
     let response = client
@@ -305,8 +330,15 @@ async fn start_process_cli(
     Ok(())
 }
 
-async fn list_processes_cli() -> anyhow::Result<()> {
+async fn list_processes_cli(show_all: bool) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
+    
+    // Load config to check access control settings
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(_) => Config::default(),
+    };
+    
     let response = client
         .get("http://localhost:7337/api/processes")
         .send()
@@ -315,11 +347,37 @@ async fn list_processes_cli() -> anyhow::Result<()> {
     if response.status().is_success() {
         let data: serde_json::Value = response.json().await?;
         
+        // Get current working directory for filtering (unless --all is specified)
+        let access_group = if !show_all {
+            match std::env::current_dir() {
+                Ok(cwd) => Some(agent_process_manager::utils::access_group_from_dir(&cwd)),
+                Err(e) => {
+                    eprintln!("Warning: Failed to get current directory: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        
         println!("{:<20} {:<10} {:<10} {:<10}", "NAME", "STATUS", "PID", "UPTIME");
         println!("{}", "-".repeat(50));
         
         if let Some(processes) = data["data"].as_array() {
             for process in processes {
+                // Filter by access group if not showing all
+                if let Some(ref group) = access_group {
+                    // Use new check_access function for read operation
+                    if !agent_process_manager::utils::check_access(
+                        Some(group),
+                        process["access_group"].as_str(),
+                        false,  // read operation
+                        &config.access_control.mode
+                    ) {
+                        continue;
+                    }
+                }
+                
                 println!(
                     "{:<20} {:<10} {:<10} {:<10}",
                     process["name"].as_str().unwrap_or(""),
@@ -336,8 +394,27 @@ async fn list_processes_cli() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn show_logs_cli(name: String, errors_only: bool, _follow: bool) -> anyhow::Result<()> {
+async fn show_logs_cli(name: String, errors_only: bool, _follow: bool, show_all: bool) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
+    
+    // Load config to check access control settings
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(_) => Config::default(),
+    };
+    
+    // Get current working directory for filtering (unless --all is specified)
+    let access_group = if !show_all {
+        match std::env::current_dir() {
+            Ok(cwd) => Some(agent_process_manager::utils::access_group_from_dir(&cwd)),
+            Err(e) => {
+                eprintln!("Warning: Failed to get current directory: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
     
     // First, get the process ID from the name
     let processes_response = client
@@ -351,18 +428,39 @@ async fn show_logs_cli(name: String, errors_only: bool, _follow: bool) -> anyhow
     }
     
     let processes: serde_json::Value = processes_response.json().await?;
-    let process_id = if let Some(data) = processes["data"].as_array() {
+    let process_info = if let Some(data) = processes["data"].as_array() {
         data.iter()
-            .find(|p| p["name"].as_str() == Some(&name) || p["id"].as_str() == Some(&name))
-            .and_then(|p| p["id"].as_str())
+            .find(|p| {
+                let name_match = p["name"].as_str() == Some(&name) || p["id"].as_str() == Some(&name);
+                if !name_match {
+                    return false;
+                }
+                // Check access group if not showing all
+                if let Some(ref group) = access_group {
+                    // Use new check_access function for read operation
+                    agent_process_manager::utils::check_access(
+                        Some(group),
+                        p["access_group"].as_str(),
+                        false,  // read operation
+                        &config.access_control.mode
+                    )
+                } else {
+                    true
+                }
+            })
     } else {
         None
     };
     
-    let Some(id) = process_id else {
-        eprintln!("Error: Process '{}' not found", name);
+    let Some(process) = process_info else {
+        eprintln!("Error: Process '{}' not found or not accessible from this directory", name);
+        if !show_all {
+            eprintln!("Hint: Use --all flag to access processes from other directories");
+        }
         std::process::exit(1);
     };
+    
+    let id = process["id"].as_str().unwrap();
     
     // Now get the logs
     let url = if errors_only {
@@ -504,8 +602,27 @@ async fn show_status_cli() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn stop_process_cli(name: String) -> anyhow::Result<()> {
+async fn stop_process_cli(name: String, show_all: bool) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
+    
+    // Load config to check access control settings
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(_) => Config::default(),
+    };
+    
+    // Get current working directory for filtering (unless --all is specified)
+    let access_group = if !show_all {
+        match std::env::current_dir() {
+            Ok(cwd) => Some(agent_process_manager::utils::access_group_from_dir(&cwd)),
+            Err(e) => {
+                eprintln!("Warning: Failed to get current directory: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
     
     // First, get the process ID from the name
     let processes_response = client
@@ -519,18 +636,38 @@ async fn stop_process_cli(name: String) -> anyhow::Result<()> {
     }
     
     let processes: serde_json::Value = processes_response.json().await?;
-    let process_id = if let Some(data) = processes["data"].as_array() {
+    let process_info = if let Some(data) = processes["data"].as_array() {
         data.iter()
-            .find(|p| p["name"].as_str() == Some(&name) || p["id"].as_str() == Some(&name))
-            .and_then(|p| p["id"].as_str())
+            .find(|p| {
+                let name_match = p["name"].as_str() == Some(&name) || p["id"].as_str() == Some(&name);
+                if !name_match {
+                    return false;
+                }
+                // Check access group if not showing all - WRITE operation always checks hierarchy
+                if let Some(ref group) = access_group {
+                    agent_process_manager::utils::check_access(
+                        Some(group),
+                        p["access_group"].as_str(),
+                        true,   // write operation
+                        &config.access_control.mode
+                    )
+                } else {
+                    true
+                }
+            })
     } else {
         None
     };
     
-    let Some(id) = process_id else {
-        eprintln!("Error: Process '{}' not found", name);
+    let Some(process) = process_info else {
+        eprintln!("Error: Process '{}' not found or not accessible from this directory", name);
+        if !show_all {
+            eprintln!("Hint: Use --all flag to access processes from other directories");
+        }
         std::process::exit(1);
     };
+    
+    let id = process["id"].as_str().unwrap();
     
     // Now stop the process
     let response = client
@@ -547,8 +684,27 @@ async fn stop_process_cli(name: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn restart_process_cli(name: String) -> anyhow::Result<()> {
+async fn restart_process_cli(name: String, show_all: bool) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
+    
+    // Load config to check access control settings
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(_) => Config::default(),
+    };
+    
+    // Get current working directory for filtering (unless --all is specified)
+    let access_group = if !show_all {
+        match std::env::current_dir() {
+            Ok(cwd) => Some(agent_process_manager::utils::access_group_from_dir(&cwd)),
+            Err(e) => {
+                eprintln!("Warning: Failed to get current directory: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
     
     // First, get the process ID from the name
     let processes_response = client
@@ -562,18 +718,38 @@ async fn restart_process_cli(name: String) -> anyhow::Result<()> {
     }
     
     let processes: serde_json::Value = processes_response.json().await?;
-    let process_id = if let Some(data) = processes["data"].as_array() {
+    let process_info = if let Some(data) = processes["data"].as_array() {
         data.iter()
-            .find(|p| p["name"].as_str() == Some(&name) || p["id"].as_str() == Some(&name))
-            .and_then(|p| p["id"].as_str())
+            .find(|p| {
+                let name_match = p["name"].as_str() == Some(&name) || p["id"].as_str() == Some(&name);
+                if !name_match {
+                    return false;
+                }
+                // Check access group if not showing all - WRITE operation always checks hierarchy
+                if let Some(ref group) = access_group {
+                    agent_process_manager::utils::check_access(
+                        Some(group),
+                        p["access_group"].as_str(),
+                        true,   // write operation
+                        &config.access_control.mode
+                    )
+                } else {
+                    true
+                }
+            })
     } else {
         None
     };
     
-    let Some(id) = process_id else {
-        eprintln!("Process '{}' not found", name);
-        return Ok(());
+    let Some(process) = process_info else {
+        eprintln!("Error: Process '{}' not found or not accessible from this directory", name);
+        if !show_all {
+            eprintln!("Hint: Use --all flag to access processes from other directories");
+        }
+        std::process::exit(1);
     };
+    
+    let id = process["id"].as_str().unwrap();
     
     // Now restart the process
     let response = client
