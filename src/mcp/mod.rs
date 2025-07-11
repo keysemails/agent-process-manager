@@ -34,6 +34,7 @@ pub struct McpServer {
 pub(crate) struct McpServerHandler {
     pub process_manager: Arc<ProcessManager>,
     pub log_storage: Arc<LogStorage>,
+    pub config: crate::config::Config,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -72,10 +73,12 @@ impl McpServer {
     pub async fn new(
         process_manager: Arc<ProcessManager>,
         log_storage: Arc<LogStorage>,
+        config: crate::config::Config,
     ) -> Result<Self> {
         let handler = McpServerHandler {
             process_manager,
             log_storage,
+            config,
         };
         Ok(Self { handler })
     }
@@ -104,29 +107,6 @@ impl McpServerHandler {
         Content::text(text)
     }
     
-    /// Check if the current access group has hierarchical access to a process
-    fn has_hierarchical_access(current_access_group: &Option<String>, process_access_group: &Option<String>) -> bool {
-        // If process has no access group, it's globally accessible
-        if process_access_group.is_none() {
-            return true;
-        }
-        
-        // Both must have access groups for comparison
-        let (Some(current), Some(process)) = (current_access_group, process_access_group) else {
-            return false;
-        };
-        
-        // Extract paths from access groups
-        let Some(current_path) = crate::utils::path_from_access_group(current) else {
-            return false;
-        };
-        let Some(process_path) = crate::utils::path_from_access_group(process) else {
-            return false;
-        };
-        
-        // Check if current directory is an ancestor of process directory
-        crate::utils::is_ancestor_path(&current_path, &process_path)
-    }
 
     fn create_error_result(message: String) -> CallToolResult {
         CallToolResult {
@@ -198,7 +178,7 @@ impl McpServerHandler {
 
         match self.process_manager.list_processes().await {
             Ok(processes) => {
-                // Filter processes by access group with hierarchical access
+                // Filter processes by access group with configurable read access
                 let filtered_processes: Vec<_> = processes
                     .into_iter()
                     .filter(|p| {
@@ -207,8 +187,13 @@ impl McpServerHandler {
                             return true;
                         }
                         
-                        // Use hierarchical access checking
-                        Self::has_hierarchical_access(&access_group, &p.access_group)
+                        // Use new check_access function for read operation
+                        crate::utils::check_access(
+                            access_group.as_deref(),
+                            p.access_group.as_deref(),
+                            false,  // read operation
+                            &self.config.access_control.effective_mode()
+                        )
                     })
                     .collect();
                 
@@ -263,8 +248,13 @@ impl McpServerHandler {
         // Check if process exists and is accessible
         match self.process_manager.get_process(&process_id).await {
             Ok(process_info) => {
-                // Check access permissions using hierarchical access
-                if !Self::has_hierarchical_access(&access_group, &process_info.access_group) {
+                // Check access permissions using configurable read access
+                if !crate::utils::check_access(
+                    access_group.as_deref(),
+                    process_info.access_group.as_deref(),
+                    false,  // read operation
+                    &self.config.access_control.effective_mode()
+                ) {
                     return Self::create_error_result(format!("Access denied: process '{}' is not accessible from this directory", process_id));
                 }
                 
@@ -330,8 +320,13 @@ impl McpServerHandler {
         // Check if process exists and is accessible
         match self.process_manager.get_process(&process_id).await {
             Ok(process_info) => {
-                // Check access permissions using hierarchical access
-                if !Self::has_hierarchical_access(&access_group, &process_info.access_group) {
+                // Check access permissions - WRITE operation always requires hierarchical access
+                if !crate::utils::check_access(
+                    access_group.as_deref(),
+                    process_info.access_group.as_deref(),
+                    true,   // write operation
+                    &self.config.access_control.effective_mode()
+                ) {
                     return Self::create_error_result(format!("Access denied: process '{}' is not accessible from this directory", process_id));
                 }
                 
@@ -400,8 +395,13 @@ impl McpServerHandler {
                 if access_group.is_none() {
                     return true;
                 }
-                // Use hierarchical access checking
-                Self::has_hierarchical_access(&access_group, &p.access_group)
+                // Use configurable access checking for read operation
+                crate::utils::check_access(
+                    access_group.as_deref(),
+                    p.access_group.as_deref(),
+                    false,  // read operation
+                    &self.config.access_control.effective_mode()
+                )
             })
             .collect();
         
@@ -435,8 +435,13 @@ impl McpServerHandler {
                 if access_group.is_none() {
                     return true;
                 }
-                // Use hierarchical access checking
-                Self::has_hierarchical_access(&access_group, &p.access_group)
+                // Use configurable access checking for read operation
+                crate::utils::check_access(
+                    access_group.as_deref(),
+                    p.access_group.as_deref(),
+                    false,  // read operation
+                    &self.config.access_control.effective_mode()
+                )
             })
             .collect();
 

@@ -164,6 +164,48 @@ apm list                          # Shows all processes under /home/user
 - **Service Isolation**: Each service directory sees only its own processes
 - **Development Workflow**: Work in subdirectories while monitoring from project root
 
+### Configurable Access Control Modes
+
+APM supports three access control modes that can be configured in `apm.yaml`:
+
+1. **Open Mode** (`mode: "open"`) - Default and recommended for most users
+   - **Read operations** (list, logs): Can see all processes regardless of directory
+   - **Write operations** (stop, restart, attach): Require hierarchical access
+   - Best for collaborative development and debugging
+   - Better observability - agents can see what ports are in use system-wide
+
+2. **Strict Mode** (`mode: "strict"`) - For high-security environments
+   - Both read and write operations require hierarchical access
+   - Provides complete isolation between directory contexts
+
+3. **Unrestricted Mode** (`mode: "unrestricted"`) - For admin environments
+   - Full read/write access to all processes regardless of directory structure
+   - Bypasses all hierarchical access controls
+   - Useful for administrative tools and monitoring systems
+
+#### Configuration Examples
+
+```yaml
+# Default open mode (recommended)
+access_control:
+  mode: "open"
+
+# Strict security mode
+access_control:
+  mode: "strict"
+
+# Unrestricted admin mode
+access_control:
+  mode: "unrestricted"
+
+# Legacy compatibility (still supported)
+access_control:
+  isolate_read_access: false  # equivalent to "open"
+  # isolate_read_access: true   # equivalent to "strict"
+```
+
+The `--all` flag bypasses access control modes for superuser access in CLI commands.
+
 ## Development Guidelines
 
 ### Building and Testing

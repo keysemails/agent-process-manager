@@ -16,3 +16,14 @@ mcp:
   tcp_host: "127.0.0.1"  # Bind to localhost only
   tcp_port: 7338         # TCP port for MCP
   unix_socket: "/tmp/apm.sock"  # Unix socket path (if using unix_socket transport)
+
+# Access Control Configuration
+# access_control:
+#   mode: "open"                # Access control mode (default: "open")
+#                               # "open": Read access is open to all, write operations require hierarchical access
+#                               # "strict": Both read and write operations require hierarchical access
+#                               # "unrestricted": Full read/write access to all processes regardless of directory
+#
+# Legacy compatibility (overrides mode if present):
+#   isolate_read_access: false  # When false: equivalent to "open" mode
+#                               # When true: equivalent to "strict" mode

@@ -170,24 +170,6 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-/// Check if the current access group has hierarchical access to a process
-fn has_hierarchical_access_cli(current_group: &str, process_group: Option<&str>) -> bool {
-    // If process has no access group, it's globally accessible
-    let Some(process_group) = process_group else {
-        return true;
-    };
-    
-    // Extract paths from access groups
-    let Some(current_path) = agent_process_manager::utils::path_from_access_group(current_group) else {
-        return false;
-    };
-    let Some(process_path) = agent_process_manager::utils::path_from_access_group(process_group) else {
-        return false;
-    };
-    
-    // Check if current directory is an ancestor of process directory
-    agent_process_manager::utils::is_ancestor_path(&current_path, &process_path)
-}
 
 async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
     info!("Starting Agent Process Manager daemon...");
@@ -239,9 +221,10 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
         let mcp_manager = process_manager.clone();
         let mcp_storage = log_storage.clone();
         let mcp_config = config.mcp.clone();
+        let full_config = config.clone();
         
         Some(tokio::spawn(async move {
-            if let Err(e) = start_mcp_server(mcp_manager, mcp_storage, mcp_config).await {
+            if let Err(e) = start_mcp_server(mcp_manager, mcp_storage, mcp_config, full_config).await {
                 error!("MCP server error: {}", e);
             }
         }))
@@ -349,6 +332,13 @@ async fn start_process_cli(
 
 async fn list_processes_cli(show_all: bool) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
+    
+    // Load config to check access control settings
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(_) => Config::default(),
+    };
+    
     let response = client
         .get("http://localhost:7337/api/processes")
         .send()
@@ -377,7 +367,13 @@ async fn list_processes_cli(show_all: bool) -> anyhow::Result<()> {
             for process in processes {
                 // Filter by access group if not showing all
                 if let Some(ref group) = access_group {
-                    if !has_hierarchical_access_cli(group, process["access_group"].as_str()) {
+                    // Use new check_access function for read operation
+                    if !agent_process_manager::utils::check_access(
+                        Some(group),
+                        process["access_group"].as_str(),
+                        false,  // read operation
+                        &config.access_control.effective_mode()
+                    ) {
                         continue;
                     }
                 }
@@ -400,6 +396,12 @@ async fn list_processes_cli(show_all: bool) -> anyhow::Result<()> {
 
 async fn show_logs_cli(name: String, errors_only: bool, _follow: bool, show_all: bool) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
+    
+    // Load config to check access control settings
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(_) => Config::default(),
+    };
     
     // Get current working directory for filtering (unless --all is specified)
     let access_group = if !show_all {
@@ -435,7 +437,13 @@ async fn show_logs_cli(name: String, errors_only: bool, _follow: bool, show_all:
                 }
                 // Check access group if not showing all
                 if let Some(ref group) = access_group {
-                    has_hierarchical_access_cli(group, p["access_group"].as_str())
+                    // Use new check_access function for read operation
+                    agent_process_manager::utils::check_access(
+                        Some(group),
+                        p["access_group"].as_str(),
+                        false,  // read operation
+                        &config.access_control.effective_mode()
+                    )
                 } else {
                     true
                 }
@@ -597,6 +605,12 @@ async fn show_status_cli() -> anyhow::Result<()> {
 async fn stop_process_cli(name: String, show_all: bool) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     
+    // Load config to check access control settings
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(_) => Config::default(),
+    };
+    
     // Get current working directory for filtering (unless --all is specified)
     let access_group = if !show_all {
         match std::env::current_dir() {
@@ -629,9 +643,14 @@ async fn stop_process_cli(name: String, show_all: bool) -> anyhow::Result<()> {
                 if !name_match {
                     return false;
                 }
-                // Check access group if not showing all
+                // Check access group if not showing all - WRITE operation always checks hierarchy
                 if let Some(ref group) = access_group {
-                    has_hierarchical_access_cli(group, p["access_group"].as_str())
+                    agent_process_manager::utils::check_access(
+                        Some(group),
+                        p["access_group"].as_str(),
+                        true,   // write operation
+                        &config.access_control.effective_mode()
+                    )
                 } else {
                     true
                 }
@@ -668,6 +687,12 @@ async fn stop_process_cli(name: String, show_all: bool) -> anyhow::Result<()> {
 async fn restart_process_cli(name: String, show_all: bool) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     
+    // Load config to check access control settings
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(_) => Config::default(),
+    };
+    
     // Get current working directory for filtering (unless --all is specified)
     let access_group = if !show_all {
         match std::env::current_dir() {
@@ -700,9 +725,14 @@ async fn restart_process_cli(name: String, show_all: bool) -> anyhow::Result<()>
                 if !name_match {
                     return false;
                 }
-                // Check access group if not showing all
+                // Check access group if not showing all - WRITE operation always checks hierarchy
                 if let Some(ref group) = access_group {
-                    has_hierarchical_access_cli(group, p["access_group"].as_str())
+                    agent_process_manager::utils::check_access(
+                        Some(group),
+                        p["access_group"].as_str(),
+                        true,   // write operation
+                        &config.access_control.effective_mode()
+                    )
                 } else {
                     true
                 }

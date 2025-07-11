@@ -55,6 +55,45 @@ pub fn path_from_access_group(access_group: &str) -> Option<PathBuf> {
         .map(|path_str| PathBuf::from(path_str))
 }
 
+/// Check if the given access is allowed based on operation type and config
+pub fn check_access(
+    current_access_group: Option<&str>,
+    target_access_group: Option<&str>,
+    is_write_operation: bool,
+    access_mode: &crate::config::AccessControlMode,
+) -> bool {
+    use crate::config::AccessControlMode;
+    
+    // If target has no access group, it's globally accessible
+    if target_access_group.is_none() {
+        return true;
+    }
+    
+    // Handle unrestricted mode - full access to everything
+    if matches!(access_mode, AccessControlMode::Unrestricted) {
+        return true;
+    }
+    
+    // For read operations in open mode, allow access
+    if !is_write_operation && matches!(access_mode, AccessControlMode::Open) {
+        return true;
+    }
+    
+    // For write operations or strict mode, check hierarchical access
+    match (current_access_group, target_access_group) {
+        (Some(current), Some(target)) => {
+            // Extract paths and check hierarchical access
+            match (path_from_access_group(current), path_from_access_group(target)) {
+                (Some(current_path), Some(target_path)) => {
+                    is_ancestor_path(&current_path, &target_path)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,5 +175,80 @@ mod tests {
         let access_group = "file:/home/user/projects";
         let path = path_from_access_group(access_group);
         assert_eq!(path, None);
+    }
+    
+    #[test]
+    fn test_check_access() {
+        use crate::config::AccessControlMode;
+        
+        // Test read operation with open mode
+        assert!(check_access(
+            Some("dir:/home/user/projects/backend"),
+            Some("dir:/home/user/projects/frontend"),
+            false,  // read operation
+            &AccessControlMode::Open
+        ));
+        
+        // Test read operation with strict mode
+        assert!(!check_access(
+            Some("dir:/home/user/projects/backend"),
+            Some("dir:/home/user/projects/frontend"),
+            false,  // read operation
+            &AccessControlMode::Strict
+        ));
+        
+        // Test unrestricted mode - should allow everything
+        assert!(check_access(
+            Some("dir:/home/user/projects/backend"),
+            Some("dir:/home/user/projects/frontend"),
+            true,   // write operation
+            &AccessControlMode::Unrestricted
+        ));
+        
+        // Test write operation with open mode (still checks hierarchical access)
+        assert!(!check_access(
+            Some("dir:/home/user/projects/backend"),
+            Some("dir:/home/user/projects/frontend"),
+            true,   // write operation
+            &AccessControlMode::Open
+        ));
+        
+        // Test hierarchical access for write
+        assert!(check_access(
+            Some("dir:/home/user/projects"),
+            Some("dir:/home/user/projects/backend"),
+            true,   // write operation
+            &AccessControlMode::Open
+        ));
+        
+        // Test no target access group (globally accessible)
+        assert!(check_access(
+            Some("dir:/home/user/projects"),
+            None,
+            true,   // even write operations allowed
+            &AccessControlMode::Strict
+        ));
+        
+        // Test unrestricted mode - should allow everything regardless of hierarchy
+        assert!(check_access(
+            Some("dir:/home/user/projects/backend"),
+            Some("dir:/home/user/projects/frontend"),
+            true,   // write operation
+            &AccessControlMode::Unrestricted
+        ));
+        
+        assert!(check_access(
+            Some("dir:/home/user/projects/backend"),
+            Some("dir:/var/log"),
+            true,   // write operation to completely different path
+            &AccessControlMode::Unrestricted
+        ));
+        
+        assert!(check_access(
+            None,
+            Some("dir:/home/user/projects"),
+            true,   // write operation without any access group
+            &AccessControlMode::Unrestricted
+        ));
     }
 }
