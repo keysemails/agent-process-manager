@@ -372,7 +372,7 @@ async fn list_processes_cli(show_all: bool) -> anyhow::Result<()> {
                         Some(group),
                         process["access_group"].as_str(),
                         false,  // read operation
-                        &config.access_control.effective_mode()
+                        &config.access_control.mode
                     ) {
                         continue;
                     }
@@ -442,7 +442,7 @@ async fn show_logs_cli(name: String, errors_only: bool, _follow: bool, show_all:
                         Some(group),
                         p["access_group"].as_str(),
                         false,  // read operation
-                        &config.access_control.effective_mode()
+                        &config.access_control.mode
                     )
                 } else {
                     true
@@ -649,7 +649,7 @@ async fn stop_process_cli(name: String, show_all: bool) -> anyhow::Result<()> {
                         Some(group),
                         p["access_group"].as_str(),
                         true,   // write operation
-                        &config.access_control.effective_mode()
+                        &config.access_control.mode
                     )
                 } else {
                     true
@@ -731,7 +731,7 @@ async fn restart_process_cli(name: String, show_all: bool) -> anyhow::Result<()>
                         Some(group),
                         p["access_group"].as_str(),
                         true,   // write operation
-                        &config.access_control.effective_mode()
+                        &config.access_control.mode
                     )
                 } else {
                     true

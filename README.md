@@ -13,6 +13,7 @@ A standalone service for AI-native process management that reduces context usage
 - 🌐 **REST API**: Full programmatic control
 - 📡 **WebSocket Streaming**: Real-time log monitoring
 - 🖥️ **CLI Interface**: Human-friendly command-line tool
+- 🔐 **Configurable Access Control**: Flexible read/write access modes with hierarchical directory-based isolation
 
 ## Installation
 

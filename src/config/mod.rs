@@ -96,34 +96,12 @@ pub struct AccessControlConfig {
     /// Access control mode
     #[serde(default = "default_access_control_mode")]
     pub mode: AccessControlMode,
-    
-    /// Legacy field for backwards compatibility
-    /// When present, overrides the mode setting
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub isolate_read_access: Option<bool>,
-}
-
-impl AccessControlConfig {
-    /// Get the effective access control mode, handling backwards compatibility
-    pub fn effective_mode(&self) -> AccessControlMode {
-        // Legacy field takes precedence for backwards compatibility
-        if let Some(isolate_read_access) = self.isolate_read_access {
-            if isolate_read_access {
-                AccessControlMode::Strict
-            } else {
-                AccessControlMode::Open
-            }
-        } else {
-            self.mode.clone()
-        }
-    }
 }
 
 impl Default for AccessControlConfig {
     fn default() -> Self {
         Self {
             mode: AccessControlMode::default(),
-            isolate_read_access: None,
         }
     }
 }
@@ -146,10 +124,6 @@ fn default_unix_socket() -> String {
 
 fn default_access_control_mode() -> AccessControlMode {
     AccessControlMode::Open
-}
-
-fn default_isolate_read_access() -> bool {
-    false  // Default: open read access for all agents
 }
 
 impl Default for Config {

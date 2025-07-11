@@ -197,11 +197,6 @@ access_control:
 # Unrestricted admin mode
 access_control:
   mode: "unrestricted"
-
-# Legacy compatibility (still supported)
-access_control:
-  isolate_read_access: false  # equivalent to "open"
-  # isolate_read_access: true   # equivalent to "strict"
 ```
 
 The `--all` flag bypasses access control modes for superuser access in CLI commands.

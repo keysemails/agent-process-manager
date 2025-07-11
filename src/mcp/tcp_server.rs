@@ -17,14 +17,15 @@ use super::McpServerHandler;
 pub async fn start_mcp_server(
     process_manager: Arc<ProcessManager>,
     log_storage: Arc<LogStorage>,
-    config: McpConfig,
+    mcp_config: McpConfig,
+    full_config: crate::config::Config,
 ) -> Result<()> {
-    match config.transport {
+    match mcp_config.transport {
         McpTransport::Tcp => {
-            start_tcp_server(process_manager, log_storage, &config).await
+            start_tcp_server(process_manager, log_storage, &mcp_config, full_config).await
         }
         McpTransport::UnixSocket => {
-            start_unix_socket_server(process_manager, log_storage, &config).await
+            start_unix_socket_server(process_manager, log_storage, &mcp_config, full_config).await
         }
     }
 }
@@ -32,9 +33,10 @@ pub async fn start_mcp_server(
 async fn start_tcp_server(
     process_manager: Arc<ProcessManager>,
     log_storage: Arc<LogStorage>,
-    config: &McpConfig,
+    mcp_config: &McpConfig,
+    full_config: crate::config::Config,
 ) -> Result<()> {
-    let addr = format!("{}:{}", config.tcp_host, config.tcp_port);
+    let addr = format!("{}:{}", mcp_config.tcp_host, mcp_config.tcp_port);
     let listener = TcpListener::bind(&addr).await?;
     info!("MCP TCP server listening on {}", addr);
 
@@ -45,6 +47,7 @@ async fn start_tcp_server(
                 let handler = McpServerHandler {
                     process_manager: process_manager.clone(),
                     log_storage: log_storage.clone(),
+                    config: full_config.clone(),
                 };
                 
                 tokio::spawn(async move {
@@ -63,15 +66,16 @@ async fn start_tcp_server(
 async fn start_unix_socket_server(
     process_manager: Arc<ProcessManager>,
     log_storage: Arc<LogStorage>,
-    config: &McpConfig,
+    mcp_config: &McpConfig,
+    full_config: crate::config::Config,
 ) -> Result<()> {
     // Remove existing socket file if it exists
-    if std::path::Path::new(&config.unix_socket).exists() {
-        std::fs::remove_file(&config.unix_socket)?;
+    if std::path::Path::new(&mcp_config.unix_socket).exists() {
+        std::fs::remove_file(&mcp_config.unix_socket)?;
     }
 
-    let listener = UnixListener::bind(&config.unix_socket)?;
-    info!("MCP Unix socket server listening on {}", config.unix_socket);
+    let listener = UnixListener::bind(&mcp_config.unix_socket)?;
+    info!("MCP Unix socket server listening on {}", mcp_config.unix_socket);
 
     loop {
         match listener.accept().await {
@@ -80,6 +84,7 @@ async fn start_unix_socket_server(
                 let handler = McpServerHandler {
                     process_manager: process_manager.clone(),
                     log_storage: log_storage.clone(),
+                    config: full_config.clone(),
                 };
                 
                 tokio::spawn(async move {

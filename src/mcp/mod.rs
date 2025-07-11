@@ -192,7 +192,7 @@ impl McpServerHandler {
                             access_group.as_deref(),
                             p.access_group.as_deref(),
                             false,  // read operation
-                            &self.config.access_control.effective_mode()
+                            &self.config.access_control.mode
                         )
                     })
                     .collect();
@@ -253,7 +253,7 @@ impl McpServerHandler {
                     access_group.as_deref(),
                     process_info.access_group.as_deref(),
                     false,  // read operation
-                    &self.config.access_control.effective_mode()
+                    &self.config.access_control.mode
                 ) {
                     return Self::create_error_result(format!("Access denied: process '{}' is not accessible from this directory", process_id));
                 }
@@ -325,7 +325,7 @@ impl McpServerHandler {
                     access_group.as_deref(),
                     process_info.access_group.as_deref(),
                     true,   // write operation
-                    &self.config.access_control.effective_mode()
+                    &self.config.access_control.mode
                 ) {
                     return Self::create_error_result(format!("Access denied: process '{}' is not accessible from this directory", process_id));
                 }
@@ -400,7 +400,7 @@ impl McpServerHandler {
                     access_group.as_deref(),
                     p.access_group.as_deref(),
                     false,  // read operation
-                    &self.config.access_control.effective_mode()
+                    &self.config.access_control.mode
                 )
             })
             .collect();
@@ -440,7 +440,7 @@ impl McpServerHandler {
                     access_group.as_deref(),
                     p.access_group.as_deref(),
                     false,  // read operation
-                    &self.config.access_control.effective_mode()
+                    &self.config.access_control.mode
                 )
             })
             .collect();
