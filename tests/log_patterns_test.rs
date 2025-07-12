@@ -1,6 +1,5 @@
 use agent_process_manager::logs::{PatternDetector, DetectedPattern};
 use proptest::prelude::*;
-use test_case::test_case;
 
 #[test]
 fn test_port_detection() {

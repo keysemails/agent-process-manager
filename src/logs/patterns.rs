@@ -41,10 +41,10 @@ impl PatternDetector {
             CompiledPattern {
                 name: "port",
                 // Primary port detection - explicit port contexts and URLs
-                regex: Regex::new(r"(?i)(?:(?:port[s]?\s*[:=]?\s*|listening\s+on\s*:?\s*|started\s+on\s+)(\d{1,5})\b|(?:(?:0\.0\.0\.0|localhost|127\.0\.0\.1|::1|::):|https?://[^:]+:)(\d{1,5})\b)").unwrap(),
+                regex: Regex::new(r"(?i)(?:(?:listening\s+on\s+)(?:\d{1,3}\.){3}\d{1,3}:(\d{1,5})\b|(?:(?:0\.0\.0\.0|localhost|127\.0\.0\.1|::1|::)|https?://[^:]+):(\d{1,5})\b|(?:port[s]?\s*[:=]?\s*|listening\s+on\s*:?\s*|started\s+on\s+)(\d{1,5})\b)").unwrap(),
                 extractor: Box::new(|caps| {
-                    // Try group 1 first (port contexts), then group 2 (URL/IP contexts)
-                    caps.get(1).or_else(|| caps.get(2))
+                    // Try group 1 first (IP:port), then group 2 (URL/IP contexts), then group 3 (port contexts)
+                    caps.get(1).or_else(|| caps.get(2)).or_else(|| caps.get(3))
                         .and_then(|m| m.as_str().parse::<u16>().ok())
                         .filter(|&p| p > 0)
                         .map(DetectedPattern::Port)

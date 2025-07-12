@@ -57,7 +57,7 @@ async fn test_log_summary_with_real_data() {
         pty: false,
         resources: ResourceLimits::default(),
         restart_policy: RestartPolicy::default(),
-        use_tmux: false,
+        use_tmux: true,
         access_group: None,
     };
     
@@ -114,7 +114,7 @@ async fn test_error_pattern_detection() {
         pty: false,
         resources: ResourceLimits::default(),
         restart_policy: RestartPolicy::default(),
-        use_tmux: false,
+        use_tmux: true,
         access_group: None,
     };
     
@@ -172,7 +172,7 @@ async fn test_enhanced_api_with_summarizer() {
         pty: false,
         resources: ResourceLimits::default(),
         restart_policy: RestartPolicy::default(),
-        use_tmux: false,
+        use_tmux: true,
         access_group: None,
     };
     
