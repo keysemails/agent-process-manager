@@ -396,8 +396,15 @@ impl ProcessManager {
             let storage = self.storage.clone();
             
             tokio::spawn(async move {
+                // Use shorter interval for tests
+                let check_interval = if cfg!(test) {
+                    tokio::time::Duration::from_millis(100)
+                } else {
+                    tokio::time::Duration::from_secs(5)
+                };
+                
                 loop {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(check_interval).await;
                     
                     // Check if session still exists
                     if !TmuxManager::session_exists(&session) {

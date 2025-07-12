@@ -89,6 +89,12 @@ impl TmuxManager {
             tmux_cmd.push_str(&format!(" \\; pipe-pane -o 'cat >> {}'", log_path));
         }
         
+        // Send environment variables first if any
+        for (key, value) in env {
+            tmux_cmd.push_str(&format!(" \\; send-keys 'export {}=\"{}\"' Enter", 
+                key, value.replace("'", "'\"'\"'")));
+        }
+        
         // Send the actual command to run
         tmux_cmd.push_str(&format!(" \\; send-keys '{}' Enter", 
             full_command.replace("'", "'\"'\"'")));

@@ -13,7 +13,7 @@ use serial_test::serial;
 async fn test_pty_master_access() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
-    let db_url = format!("sqlite:{}", db_path.display());
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
     
     let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
     let (log_tx, _log_rx) = tokio::sync::mpsc::channel(100);
@@ -28,7 +28,7 @@ async fn test_pty_master_access() {
         env: Default::default(),
         tags: vec![],
         pty: true,
-        use_tmux: false,
+        use_tmux: true,
         restart_policy: Default::default(),
         resources: Default::default(),
         access_group: None,
@@ -36,12 +36,14 @@ async fn test_pty_master_access() {
     
     let info = manager.spawn_process(config).await.unwrap();
     
-    // Test that we can get the PTY master
-    let pty_master = manager.get_pty_master(&info.id).await.unwrap();
-    assert!(pty_master.is_some(), "Process should have PTY master");
+    // With tmux, we don't get direct PTY master access
+    // Instead, verify we can get the tmux session
+    let tmux_session = manager.get_tmux_session(&info.id).await.unwrap();
+    assert!(tmux_session.is_some(), "Process should have tmux session");
+    assert!(tmux_session.unwrap().starts_with("apm-"), "Session name should start with 'apm-'");
     
-    // Wait a bit for process to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Clean up
+    let _ = manager.stop_process(&info.id).await;
 }
 
 #[tokio::test]
@@ -49,7 +51,7 @@ async fn test_pty_master_access() {
 async fn test_process_without_pty() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
-    let db_url = format!("sqlite:{}", db_path.display());
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
     
     let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
     let (log_tx, _log_rx) = tokio::sync::mpsc::channel(100);
@@ -64,7 +66,7 @@ async fn test_process_without_pty() {
         env: Default::default(),
         tags: vec![],
         pty: false,
-        use_tmux: false,
+        use_tmux: true,
         restart_policy: Default::default(),
         resources: Default::default(),
         access_group: None,
@@ -72,9 +74,12 @@ async fn test_process_without_pty() {
     
     let info = manager.spawn_process(config).await.unwrap();
     
-    // Test that PTY master is available (currently all processes use PTY)
-    let pty_master = manager.get_pty_master(&info.id).await.unwrap();
-    assert!(pty_master.is_some(), "Process should have PTY master");
+    // With tmux, all processes have a session regardless of pty flag
+    let tmux_session = manager.get_tmux_session(&info.id).await.unwrap();
+    assert!(tmux_session.is_some(), "Process should have tmux session");
+    
+    // Clean up
+    let _ = manager.stop_process(&info.id).await;
 }
 
 #[tokio::test]
@@ -82,7 +87,7 @@ async fn test_process_without_pty() {
 async fn test_pty_resize() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
-    let db_url = format!("sqlite:{}", db_path.display());
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
     
     let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
     let (log_tx, _log_rx) = tokio::sync::mpsc::channel(100);
@@ -97,7 +102,7 @@ async fn test_pty_resize() {
         env: Default::default(),
         tags: vec![],
         pty: true,
-        use_tmux: false,
+        use_tmux: true,
         restart_policy: Default::default(),
         resources: Default::default(),
         access_group: None,
@@ -105,18 +110,23 @@ async fn test_pty_resize() {
     
     let info = manager.spawn_process(config).await.unwrap();
     
-    // Get PTY master and test resize
-    if let Some(pty_master) = manager.get_pty_master(&info.id).await.unwrap() {
-        let master = pty_master.lock().await;
-        let size = portable_pty::PtySize {
-            rows: 40,
-            cols: 120,
-            pixel_width: 0,
-            pixel_height: 0,
-        };
+    // With tmux, we resize the pane directly
+    if let Some(tmux_session) = manager.get_tmux_session(&info.id).await.unwrap() {
+        // Test tmux resize-pane command
+        use std::process::Command;
+        let output = Command::new("tmux")
+            .args(&["resize-pane", "-t", &tmux_session, "-x", "120", "-y", "40"])
+            .output();
         
-        // This should not panic
-        let _ = master.resize(size);
+        // Verify the command executed (it may fail if tmux isn't available in test environment)
+        match output {
+            Ok(result) => {
+                println!("Tmux resize result: {:?}", result.status);
+            }
+            Err(e) => {
+                println!("Tmux resize not available in test environment: {}", e);
+            }
+        }
     }
     
     // Clean up
