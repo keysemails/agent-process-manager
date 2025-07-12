@@ -243,4 +243,32 @@ impl Config {
 
         config.try_deserialize()
     }
+
+    pub fn load_from_path(path: &str) -> Result<Self, config::ConfigError> {
+        eprintln!("Loading config from: {}", path);
+        
+        let builder = config::Config::builder()
+            .set_default("server.host", "0.0.0.0")?
+            .set_default("server.port", 7337)?
+            .set_default("storage.database_url", "sqlite:apm.db")?
+            .set_default("storage.log_retention_days", 7)?
+            .set_default("storage.max_log_size_mb", 1000)?
+            .set_default("ui.theme", "dark")?
+            .set_default("ui.dashboard_auth", "none")?
+            .set_default("mcp.enabled", false)?
+            .set_default("mcp.transport", "tcp")?
+            .set_default("mcp.tcp_host", "127.0.0.1")?
+            .set_default("mcp.tcp_port", 7338)?
+            .set_default("mcp.unix_socket", "/tmp/apm.sock")?
+            .set_default("access_control.mode", "open")?
+            .set_default("search.enabled", true)?
+            .set_default("search.index_path", "./apm_search_index")?
+            .set_default("search.commit_interval_seconds", 5)?
+            .set_default("search.buffer_size_mb", 50)?
+            .add_source(config::File::from(std::path::Path::new(path)).required(true))
+            .add_source(config::Environment::with_prefix("APM"))
+            .build()?;
+
+        config::Config::try_deserialize(builder)
+    }
 }

@@ -175,9 +175,18 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
     info!("Starting Agent Process Manager daemon...");
 
     // Load configuration
-    let config = if let Some(_path) = config_path {
+    let config = if let Some(path) = config_path {
         // Load from specific file
-        todo!("Load config from file")
+        match Config::load_from_path(&path) {
+            Ok(loaded_config) => {
+                info!("Successfully loaded config from {} - MCP enabled: {}", path, loaded_config.mcp.enabled);
+                loaded_config
+            }
+            Err(e) => {
+                error!("Failed to load config from {}: {}. Using defaults.", path, e);
+                return Err(anyhow::anyhow!("Failed to load config from {}: {}", path, e));
+            }
+        }
     } else {
         match Config::load() {
             Ok(loaded_config) => {
