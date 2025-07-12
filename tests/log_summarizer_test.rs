@@ -18,8 +18,8 @@ async fn setup_test_env() -> (Arc<ProcessManager>, Arc<LogStorage>, TempDir) {
     // Create log channel
     let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
     
-    let process_manager = Arc::new(ProcessManager::new(tx.clone()));
     let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
+    let process_manager = Arc::new(ProcessManager::new(log_storage.clone(), tx.clone()));
     
     // Start log storage task
     let storage_clone = log_storage.clone();
@@ -58,6 +58,7 @@ async fn test_log_summary_with_real_data() {
         resources: ResourceLimits::default(),
         restart_policy: RestartPolicy::default(),
         use_tmux: false,
+        access_group: None,
     };
     
     let process_info = process_manager.spawn_process(config).await.unwrap();
@@ -114,6 +115,7 @@ async fn test_error_pattern_detection() {
         resources: ResourceLimits::default(),
         restart_policy: RestartPolicy::default(),
         use_tmux: false,
+        access_group: None,
     };
     
     let process_info = process_manager.spawn_process(config).await.unwrap();
@@ -148,7 +150,7 @@ async fn test_enhanced_api_with_summarizer() {
     let (process_manager, log_storage, _temp_dir) = setup_test_env().await;
     
     // Create API router
-    let app = api::create_router(process_manager.clone(), log_storage.clone());
+    let app = api::create_router(process_manager.clone(), log_storage.clone(), None);
     
     // Spawn a test process
     let config = ProcessConfig {
@@ -171,6 +173,7 @@ async fn test_enhanced_api_with_summarizer() {
         resources: ResourceLimits::default(),
         restart_policy: RestartPolicy::default(),
         use_tmux: false,
+        access_group: None,
     };
     
     let process_info = process_manager.spawn_process(config).await.unwrap();

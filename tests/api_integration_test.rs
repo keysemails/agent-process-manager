@@ -18,9 +18,9 @@ async fn setup_test_app() -> (axum::Router, Arc<ProcessManager>, Arc<LogStorage>
     let db_url = format!("sqlite:{}", db_path.display());
     
     let storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
-    let manager = Arc::new(ProcessManager::new(tx));
+    let manager = Arc::new(ProcessManager::new(storage.clone(), tx));
     
-    let app = create_router(manager.clone(), storage.clone());
+    let app = create_router(manager.clone(), storage.clone(), None);
     
     (app, manager, storage, temp_dir)
 }
@@ -94,8 +94,10 @@ async fn test_list_processes_endpoint() {
             env: Default::default(),
             tags: vec!["test".to_string()],
             pty: false,
+            use_tmux: false,
             restart_policy: Default::default(),
             resources: Default::default(),
+            access_group: None,
         };
         manager.spawn_process(config).await.unwrap();
     }
@@ -133,8 +135,10 @@ async fn test_get_process_endpoint() {
         env: Default::default(),
         tags: vec![],
         pty: false,
+        use_tmux: false,
         restart_policy: Default::default(),
         resources: Default::default(),
+        access_group: None,
     };
     let info = manager.spawn_process(config).await.unwrap();
     
@@ -169,8 +173,10 @@ async fn test_stop_process_endpoint() {
         env: Default::default(),
         tags: vec![],
         pty: false,
+        use_tmux: false,
         restart_policy: Default::default(),
         resources: Default::default(),
+        access_group: None,
     };
     let info = manager.spawn_process(config).await.unwrap();
     
@@ -204,8 +210,10 @@ async fn test_restart_process_endpoint() {
         env: Default::default(),
         tags: vec![],
         pty: false,
+        use_tmux: false,
         restart_policy: Default::default(),
         resources: Default::default(),
+        access_group: None,
     };
     let info = manager.spawn_process(config).await.unwrap();
     let original_pid = info.pid;
@@ -343,8 +351,10 @@ async fn test_process_health_endpoint() {
         env: Default::default(),
         tags: vec![],
         pty: false,
+        use_tmux: false,
         restart_policy: Default::default(),
         resources: Default::default(),
+        access_group: None,
     };
     let info = manager.spawn_process(config).await.unwrap();
     

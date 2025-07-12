@@ -21,14 +21,14 @@ async fn setup_test_app() -> (axum::Router, Arc<ProcessManager>, Arc<LogStorage>
     // Create log channel
     let (tx, mut _rx) = tokio::sync::mpsc::channel(1024);
     
-    let process_manager = Arc::new(ProcessManager::new(tx));
     let log_storage = Arc::new(
         LogStorage::new(&db_url)
             .await
             .unwrap()
     );
+    let process_manager = Arc::new(ProcessManager::new(log_storage.clone(), tx));
     
-    let app = api::create_router(process_manager.clone(), log_storage.clone());
+    let app = api::create_router(process_manager.clone(), log_storage.clone(), None);
     
     (app, process_manager, log_storage, temp_dir)
 }
@@ -49,6 +49,7 @@ async fn test_system_overview_query() {
         resources: ResourceLimits::default(),
         restart_policy: RestartPolicy::default(),
         use_tmux: false,
+        access_group: None,
     };
     
     let _process_id = manager.spawn_process(config).await.unwrap();
@@ -118,6 +119,7 @@ async fn test_performance_metrics_query() {
         resources: ResourceLimits::default(),
         restart_policy: RestartPolicy::default(),
         use_tmux: false,
+        access_group: None,
     };
     
     let _process_id = manager.spawn_process(config).await.unwrap();
@@ -306,6 +308,7 @@ async fn test_response_metadata() {
             resources: ResourceLimits::default(),
             restart_policy: RestartPolicy::default(),
             use_tmux: false,
+        access_group: None,
         };
         let _ = manager.spawn_process(config).await.unwrap();
     }

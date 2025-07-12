@@ -15,9 +15,10 @@ async fn setup_test_server() -> (McpServer, TempDir) {
     
     let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
     let (log_tx, _log_rx) = tokio::sync::mpsc::channel(100);
-    let process_manager = Arc::new(ProcessManager::new(log_tx));
+    let process_manager = Arc::new(ProcessManager::new(log_storage.clone(), log_tx));
     
-    let server = McpServer::new(process_manager, log_storage).await.unwrap();
+    let config = agent_process_manager::config::Config::default();
+    let server = McpServer::new(process_manager, log_storage, config).await.unwrap();
     
     (server, temp_dir)
 }

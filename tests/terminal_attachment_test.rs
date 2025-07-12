@@ -17,7 +17,7 @@ async fn test_pty_master_access() {
     
     let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
     let (log_tx, _log_rx) = tokio::sync::mpsc::channel(100);
-    let manager = ProcessManager::new(log_tx);
+    let manager = ProcessManager::new(log_storage.clone(), log_tx);
     
     // Create a process with PTY
     let config = ProcessConfig {
@@ -28,8 +28,10 @@ async fn test_pty_master_access() {
         env: Default::default(),
         tags: vec![],
         pty: true,
+        use_tmux: false,
         restart_policy: Default::default(),
         resources: Default::default(),
+        access_group: None,
     };
     
     let info = manager.spawn_process(config).await.unwrap();
@@ -49,9 +51,9 @@ async fn test_process_without_pty() {
     let db_path = temp_dir.path().join("test.db");
     let db_url = format!("sqlite:{}", db_path.display());
     
-    let _log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
+    let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
     let (log_tx, _log_rx) = tokio::sync::mpsc::channel(100);
-    let manager = ProcessManager::new(log_tx);
+    let manager = ProcessManager::new(log_storage, log_tx);
     
     // Create a process without PTY
     let config = ProcessConfig {
@@ -62,8 +64,10 @@ async fn test_process_without_pty() {
         env: Default::default(),
         tags: vec![],
         pty: false,
+        use_tmux: false,
         restart_policy: Default::default(),
         resources: Default::default(),
+        access_group: None,
     };
     
     let info = manager.spawn_process(config).await.unwrap();
@@ -80,9 +84,9 @@ async fn test_pty_resize() {
     let db_path = temp_dir.path().join("test.db");
     let db_url = format!("sqlite:{}", db_path.display());
     
-    let _log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
+    let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
     let (log_tx, _log_rx) = tokio::sync::mpsc::channel(100);
-    let manager = ProcessManager::new(log_tx);
+    let manager = ProcessManager::new(log_storage, log_tx);
     
     // Create a long-running process with PTY
     let config = ProcessConfig {
@@ -93,8 +97,10 @@ async fn test_pty_resize() {
         env: Default::default(),
         tags: vec![],
         pty: true,
+        use_tmux: false,
         restart_policy: Default::default(),
         resources: Default::default(),
+        access_group: None,
     };
     
     let info = manager.spawn_process(config).await.unwrap();

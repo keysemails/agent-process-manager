@@ -1,3 +1,5 @@
+use agent_process_manager::logs::LogStorage;
+use tempfile::TempDir;
 use agent_process_manager::process::{ProcessManager, ProcessStatus, ProcessId};
 use agent_process_manager::process::supervisor::{ProcessConfig, RestartPolicy, ResourceLimits};
 use std::collections::HashMap;
@@ -5,10 +7,19 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use test_case::test_case;
 
+// Helper function to create test ProcessManager
+async fn create_test_manager() -> (ProcessManager, mpsc::Receiver<(ProcessId, String)>) {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+    let db_url = format!("sqlite://{}", db_path.to_string_lossy());
+    let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
+    let (tx, rx) = mpsc::channel(100);
+    (ProcessManager::new(log_storage, tx), rx)
+}
+
 #[tokio::test]
 async fn test_spawn_simple_process() {
-    let (tx, mut rx) = mpsc::channel(100);
-    let manager = ProcessManager::new(tx);
+    let (manager, mut rx) = create_test_manager().await;
     
     let config = ProcessConfig {
         name: "test-echo".to_string(),
@@ -18,8 +29,10 @@ async fn test_spawn_simple_process() {
         env: HashMap::new(),
         tags: vec![],
         pty: false,
+        use_tmux: false,
         restart_policy: RestartPolicy::default(),
         resources: ResourceLimits::default(),
+        access_group: None,
     };
     
     let info = manager.spawn_process(config).await.unwrap();
@@ -48,8 +61,7 @@ async fn test_spawn_simple_process() {
 
 #[tokio::test]
 async fn test_spawn_process_with_pty() {
-    let (tx, mut rx) = mpsc::channel(100);
-    let manager = ProcessManager::new(tx);
+    let (manager, mut rx) = create_test_manager().await;
     
     let config = ProcessConfig {
         name: "test-pty".to_string(),
@@ -59,8 +71,10 @@ async fn test_spawn_process_with_pty() {
         env: HashMap::new(),
         tags: vec![],
         pty: true,
+        use_tmux: false,
         restart_policy: RestartPolicy::default(),
         resources: ResourceLimits::default(),
+        access_group: None,
     };
     
     let info = manager.spawn_process(config).await.unwrap();
@@ -83,8 +97,7 @@ async fn test_spawn_process_with_pty() {
 
 #[tokio::test]
 async fn test_stop_process() {
-    let (tx, _rx) = mpsc::channel(100);
-    let manager = ProcessManager::new(tx);
+    let (manager, _rx) = create_test_manager().await;
     
     let config = ProcessConfig {
         name: "test-sleep".to_string(),
@@ -94,8 +107,10 @@ async fn test_stop_process() {
         env: HashMap::new(),
         tags: vec![],
         pty: false,
+        use_tmux: false,
         restart_policy: RestartPolicy::default(),
         resources: ResourceLimits::default(),
+        access_group: None,
     };
     
     let info = manager.spawn_process(config).await.unwrap();
@@ -111,8 +126,7 @@ async fn test_stop_process() {
 
 #[tokio::test]
 async fn test_restart_process() {
-    let (tx, _rx) = mpsc::channel(100);
-    let manager = ProcessManager::new(tx);
+    let (manager, _rx) = create_test_manager().await;
     
     let config = ProcessConfig {
         name: "test-restart".to_string(),
@@ -122,8 +136,10 @@ async fn test_restart_process() {
         env: HashMap::new(),
         tags: vec![],
         pty: false,
+        use_tmux: false,
         restart_policy: RestartPolicy::default(),
         resources: ResourceLimits::default(),
+        access_group: None,
     };
     
     let info = manager.spawn_process(config).await.unwrap();
@@ -143,8 +159,7 @@ async fn test_restart_process() {
 
 #[tokio::test]
 async fn test_process_with_environment() {
-    let (tx, mut rx) = mpsc::channel(100);
-    let manager = ProcessManager::new(tx);
+    let (manager, mut rx) = create_test_manager().await;
     
     let mut env = HashMap::new();
     env.insert("TEST_VAR".to_string(), "test_value".to_string());
@@ -157,8 +172,10 @@ async fn test_process_with_environment() {
         env,
         tags: vec![],
         pty: false,
+        use_tmux: false,
         restart_policy: RestartPolicy::default(),
         resources: ResourceLimits::default(),
+        access_group: None,
     };
     
     let info = manager.spawn_process(config).await.unwrap();
@@ -177,8 +194,7 @@ async fn test_process_with_environment() {
 
 #[tokio::test]
 async fn test_process_with_working_directory() {
-    let (tx, mut rx) = mpsc::channel(100);
-    let manager = ProcessManager::new(tx);
+    let (manager, mut rx) = create_test_manager().await;
     
     let temp_dir = tempfile::tempdir().unwrap();
     let cwd = temp_dir.path().to_path_buf();
@@ -191,8 +207,10 @@ async fn test_process_with_working_directory() {
         env: HashMap::new(),
         tags: vec![],
         pty: false,
+        use_tmux: false,
         restart_policy: RestartPolicy::default(),
         resources: ResourceLimits::default(),
+        access_group: None,
     };
     
     let info = manager.spawn_process(config).await.unwrap();
@@ -211,8 +229,7 @@ async fn test_process_with_working_directory() {
 
 #[tokio::test]
 async fn test_restart_policy_on_failure() {
-    let (tx, _rx) = mpsc::channel(100);
-    let manager = ProcessManager::new(tx);
+    let (manager, _rx) = create_test_manager().await;
     
     let config = ProcessConfig {
         name: "test-auto-restart".to_string(),
@@ -222,12 +239,14 @@ async fn test_restart_policy_on_failure() {
         env: HashMap::new(),
         tags: vec![],
         pty: true,
+        use_tmux: false,
         restart_policy: RestartPolicy {
             enabled: true,
             max_retries: 2,
             backoff_ms: 100,
         },
         resources: ResourceLimits::default(),
+        access_group: None,
     };
     
     let info = manager.spawn_process(config).await.unwrap();
@@ -256,8 +275,7 @@ async fn test_restart_policy_on_failure() {
 
 #[tokio::test]
 async fn test_list_processes() {
-    let (tx, _rx) = mpsc::channel(100);
-    let manager = ProcessManager::new(tx);
+    let (manager, _rx) = create_test_manager().await;
     
     // Spawn multiple processes
     let config1 = ProcessConfig {
@@ -268,8 +286,10 @@ async fn test_list_processes() {
         env: HashMap::new(),
         tags: vec!["test".to_string()],
         pty: false,
+        use_tmux: false,
         restart_policy: RestartPolicy::default(),
         resources: ResourceLimits::default(),
+        access_group: None,
     };
     
     let config2 = ProcessConfig {
@@ -280,8 +300,10 @@ async fn test_list_processes() {
         env: HashMap::new(),
         tags: vec!["test".to_string()],
         pty: false,
+        use_tmux: false,
         restart_policy: RestartPolicy::default(),
         resources: ResourceLimits::default(),
+        access_group: None,
     };
     
     let _info1 = manager.spawn_process(config1).await.unwrap();
@@ -297,8 +319,7 @@ async fn test_list_processes() {
 
 #[tokio::test]
 async fn test_process_health_metrics() {
-    let (tx, _rx) = mpsc::channel(100);
-    let manager = ProcessManager::new(tx);
+    let (manager, _rx) = create_test_manager().await;
     
     let config = ProcessConfig {
         name: "test-health".to_string(),
@@ -308,8 +329,10 @@ async fn test_process_health_metrics() {
         env: HashMap::new(),
         tags: vec![],
         pty: false,
+        use_tmux: false,
         restart_policy: RestartPolicy::default(),
         resources: ResourceLimits::default(),
+        access_group: None,
     };
     
     let info = manager.spawn_process(config).await.unwrap();
@@ -329,8 +352,7 @@ async fn test_process_health_metrics() {
 #[test_case("echo", vec!["test"], true ; "echo with pty")]
 #[tokio::test]
 async fn test_various_commands(command: &str, args: Vec<&str>, use_pty: bool) {
-    let (tx, mut rx) = mpsc::channel(100);
-    let manager = ProcessManager::new(tx);
+    let (manager, mut rx) = create_test_manager().await;
     
     let config = ProcessConfig {
         name: format!("test-{}", command),
@@ -340,8 +362,10 @@ async fn test_various_commands(command: &str, args: Vec<&str>, use_pty: bool) {
         env: HashMap::new(),
         tags: vec![],
         pty: use_pty,
+        use_tmux: false,
         restart_policy: RestartPolicy::default(),
         resources: ResourceLimits::default(),
+        access_group: None,
     };
     
     let info = manager.spawn_process(config).await.unwrap();
@@ -359,8 +383,7 @@ async fn test_various_commands(command: &str, args: Vec<&str>, use_pty: bool) {
 
 #[tokio::test]
 async fn test_process_not_found() {
-    let (tx, _rx) = mpsc::channel(100);
-    let manager = ProcessManager::new(tx);
+    let (manager, _rx) = create_test_manager().await;
     
     let fake_id = ProcessId::new();
     
@@ -379,8 +402,8 @@ async fn test_process_not_found() {
 
 #[tokio::test] 
 async fn test_concurrent_process_spawning() {
-    let (tx, _rx) = mpsc::channel(100);
-    let manager = Arc::new(ProcessManager::new(tx));
+    let (manager, _rx) = create_test_manager().await;
+    let manager = Arc::new(manager);
     
     let mut handles = vec![];
     
@@ -396,8 +419,10 @@ async fn test_concurrent_process_spawning() {
                 env: HashMap::new(),
                 tags: vec!["concurrent".to_string()],
                 pty: false,
+        use_tmux: false,
                 restart_policy: RestartPolicy::default(),
                 resources: ResourceLimits::default(),
+        access_group: None,
             };
             
             manager_clone.spawn_process(config).await
