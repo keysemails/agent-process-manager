@@ -322,7 +322,36 @@ async function perfTest() {
 }
 ```
 
-## 10. Continuous Testing
+## 10. Example Test Scripts
+
+We provide example scripts to test MCP functionality:
+
+### Python Example
+```bash
+# Start APM with MCP enabled
+APM_MCP_ENABLED=1 cargo run -- start
+
+# In another terminal, run the Python test
+python examples/test_mcp_connection.py
+```
+
+### Node.js Example
+```bash
+# Start APM with MCP enabled
+APM_MCP_ENABLED=1 cargo run -- start
+
+# In another terminal, run the Node.js test
+node examples/test_mcp_connection.js
+```
+
+These scripts demonstrate:
+- Connecting to the MCP TCP server
+- Initializing the MCP session
+- Listing available tools
+- Spawning processes
+- Querying system state
+
+## 11. Continuous Testing
 
 Add to CI/CD pipeline:
 
@@ -332,5 +361,9 @@ Add to CI/CD pipeline:
   run: |
     cargo test mcp_test
     cargo build --release
-    ./scripts/test-mcp-integration.sh
+    # Run example scripts for smoke testing
+    APM_MCP_ENABLED=1 ./target/release/apm start &
+    sleep 2
+    python examples/test_mcp_connection.py
+    pkill -f "apm start"
 ```

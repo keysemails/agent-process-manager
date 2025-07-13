@@ -30,4 +30,17 @@ async fn test_mcp_server_creation() {
 }
 
 // TODO: Add integration tests for MCP protocol communication
-// These would require setting up a mock stdin/stdout transport
+// Note: Full integration tests for MCP require:
+// 1. Starting the daemon with MCP enabled
+// 2. Connecting via TCP/Unix socket with proper MCP protocol handshake
+// 3. The rmcp crate's internal APIs are not public, making direct testing difficult
+// 
+// For now, MCP functionality is tested manually using:
+// - MCP Inspector: mcp-inspector stdio -- cargo run -- start --mcp
+// - Direct TCP connection tests
+// - The MCP testing guide in docs/MCP_TESTING_GUIDE.md
+//
+// Future improvements could include:
+// - Creating a simple MCP client library for testing
+// - Using the official MCP SDK clients (Node.js/Python)
+// - Adding example scripts that demonstrate MCP usage
