@@ -2,17 +2,19 @@
 
 ## Current Status
 
-MCP (Model Context Protocol) integration tests are currently limited to basic unit tests due to the following challenges:
+MCP (Model Context Protocol) integration tests are currently limited due to the following challenges:
 
 1. **Private APIs**: The `rmcp` crate used for MCP implementation doesn't expose public testing APIs
 2. **Protocol Complexity**: MCP requires a full JSON-RPC handshake over TCP/Unix sockets
-3. **Daemon Dependency**: Tests require starting the full APM daemon with MCP enabled
+3. **Daemon Dependency**: Full integration tests require starting the APM daemon with MCP enabled
+4. **Environment Conflicts**: Tests can conflict with running daemons or existing configurations
 
 ## Available Tests
 
 ### Unit Tests
 - `tests/mcp_test.rs` - Basic MCP server creation test
 - `tests/mcp_tcp_test.rs` - Configuration tests for TCP/Unix socket modes
+- `tests/mcp_simple_test.rs` - MCP protocol message format tests
 
 ### Manual Testing
 We provide example scripts for manual testing:
