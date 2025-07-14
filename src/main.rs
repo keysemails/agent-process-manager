@@ -401,8 +401,8 @@ async fn list_processes_cli(show_all: bool) -> anyhow::Result<()> {
             None
         };
         
-        println!("{:<20} {:<10} {:<10} {:<10}", "NAME", "STATUS", "PID", "UPTIME");
-        println!("{}", "-".repeat(50));
+        println!("{:<20} {:<10} {:<10} {:<10} {:<20}", "NAME", "STATUS", "PID", "UPTIME", "STARTED");
+        println!("{}", "-".repeat(70));
         
         if let Some(processes) = data["data"].as_array() {
             for process in processes {
@@ -419,12 +419,25 @@ async fn list_processes_cli(show_all: bool) -> anyhow::Result<()> {
                     }
                 }
                 
+                // Format the started_at time
+                let started_str = if let Some(started_at) = process["started_at"].as_str() {
+                    // Parse and format the timestamp to a more readable format
+                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(started_at) {
+                        dt.format("%Y-%m-%d %H:%M:%S").to_string()
+                    } else {
+                        started_at.to_string()
+                    }
+                } else {
+                    "N/A".to_string()
+                };
+                
                 println!(
-                    "{:<20} {:<10} {:<10} {:<10}",
+                    "{:<20} {:<10} {:<10} {:<10} {:<20}",
                     process["name"].as_str().unwrap_or(""),
                     process["status"].as_str().unwrap_or(""),
                     process["pid"].as_u64().unwrap_or(0),
-                    format!("{}s", process["uptime_seconds"].as_u64().unwrap_or(0))
+                    format!("{}s", process["uptime_seconds"].as_u64().unwrap_or(0)),
+                    started_str
                 );
             }
         }
