@@ -51,9 +51,11 @@ async fn start_tcp_server(
                 };
                 
                 tokio::spawn(async move {
+                    debug!("Spawning handler for connection from {}", peer_addr);
                     if let Err(e) = handle_connection(stream, handler).await {
-                        error!("MCP connection error: {}", e);
+                        error!("MCP connection error from {}: {}", peer_addr, e);
                     }
+                    debug!("Connection from {} ended", peer_addr);
                 });
             }
             Err(e) => {

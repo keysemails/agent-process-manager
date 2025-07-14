@@ -62,11 +62,19 @@ struct StopArgs {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct ListArgs {
+    #[serde(default)]
+    current_dir: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct QueryArgs {
     #[serde(rename = "type")]
     query_type: String,
     #[serde(default)]
     time_window: Option<String>,
+    #[serde(default)]
+    current_dir: bool,
 }
 
 impl McpServer {
@@ -164,38 +172,41 @@ impl McpServerHandler {
         }
     }
 
-    async fn handle_list(&self) -> CallToolResult {
-        debug!("MCP list tool called");
-
-        // Get the current working directory for access control
-        let access_group = match std::env::current_dir() {
-            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
-            Err(e) => {
-                error!("Failed to get current directory: {}", e);
-                None
-            }
-        };
+    async fn handle_list(&self, args: ListArgs) -> CallToolResult {
+        debug!("MCP list tool called: {:?}", args);
 
         match self.process_manager.list_processes().await {
             Ok(processes) => {
-                // Filter processes by access group with configurable read access
-                let filtered_processes: Vec<_> = processes
-                    .into_iter()
-                    .filter(|p| {
-                        // If no access group (superuser), show all
-                        if access_group.is_none() {
-                            return true;
+                // Filter processes by access group if current_dir is true
+                let filtered_processes: Vec<_> = if args.current_dir {
+                    // Get the current working directory for access control
+                    let access_group = match std::env::current_dir() {
+                        Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+                        Err(e) => {
+                            error!("Failed to get current directory: {}", e);
+                            None
                         }
-                        
-                        // Use new check_access function for read operation
-                        crate::utils::check_access(
-                            access_group.as_deref(),
-                            p.access_group.as_deref(),
-                            false,  // read operation
-                            &self.config.access_control.mode
-                        )
-                    })
-                    .collect();
+                    };
+                    
+                    processes
+                        .into_iter()
+                        .filter(|p| {
+                            if let Some(ref group) = access_group {
+                                crate::utils::check_access(
+                                    Some(group),
+                                    p.access_group.as_deref(),
+                                    false,  // read operation
+                                    &self.config.access_control.mode
+                                )
+                            } else {
+                                true
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Show all processes when current_dir is false
+                    processes
+                };
                 
                 let process_list: Vec<Value> = filtered_processes
                     .into_iter()
@@ -358,8 +369,8 @@ impl McpServerHandler {
         debug!("MCP query tool called: {:?}", args);
 
         let result = match args.query_type.as_str() {
-            "system_overview" => self.query_system_overview().await,
-            "process_errors" => self.query_process_errors(args.time_window).await,
+            "system_overview" => self.query_system_overview(args.current_dir).await,
+            "process_errors" => self.query_process_errors(args.time_window, args.current_dir).await,
             _ => {
                 return Self::create_error_result(format!("Unknown query type: {}", args.query_type));
             }
@@ -377,35 +388,39 @@ impl McpServerHandler {
     }
 
     // Helper methods
-    async fn query_system_overview(&self) -> Result<Value> {
-        // Get the current working directory for access control
-        let access_group = match std::env::current_dir() {
-            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
-            Err(e) => {
-                error!("Failed to get current directory: {}", e);
-                None
+    async fn query_system_overview(&self, current_dir: bool) -> Result<Value> {
+        // Get the current working directory for access control if current_dir is true
+        let access_group = if current_dir {
+            match std::env::current_dir() {
+                Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+                Err(e) => {
+                    error!("Failed to get current directory: {}", e);
+                    None
+                }
             }
+        } else {
+            None
         };
         
         let all_processes = self.process_manager.list_processes().await?;
         
-        // Filter processes by access group with hierarchical access
-        let processes: Vec<_> = all_processes
-            .into_iter()
-            .filter(|p| {
-                // If no access group (superuser), show all
-                if access_group.is_none() {
-                    return true;
-                }
-                // Use configurable access checking for read operation
-                crate::utils::check_access(
-                    access_group.as_deref(),
-                    p.access_group.as_deref(),
-                    false,  // read operation
-                    &self.config.access_control.mode
-                )
-            })
-            .collect();
+        // Filter processes by access group if current_dir is true
+        let processes: Vec<_> = if let Some(ref group) = access_group {
+            all_processes
+                .into_iter()
+                .filter(|p| {
+                    crate::utils::check_access(
+                        Some(group),
+                        p.access_group.as_deref(),
+                        false,  // read operation
+                        &self.config.access_control.mode
+                    )
+                })
+                .collect()
+        } else {
+            // Show all processes when current_dir is false
+            all_processes
+        };
         
         let overview = json!({
             "total_processes": processes.len(),
@@ -416,36 +431,40 @@ impl McpServerHandler {
         Ok(overview)
     }
 
-    async fn query_process_errors(&self, _time_window: Option<String>) -> Result<Value> {
-        // Get the current working directory for access control
-        let access_group = match std::env::current_dir() {
-            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
-            Err(e) => {
-                error!("Failed to get current directory: {}", e);
-                None
+    async fn query_process_errors(&self, _time_window: Option<String>, current_dir: bool) -> Result<Value> {
+        // Get the current working directory for access control if current_dir is true
+        let access_group = if current_dir {
+            match std::env::current_dir() {
+                Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+                Err(e) => {
+                    error!("Failed to get current directory: {}", e);
+                    None
+                }
             }
+        } else {
+            None
         };
         
         let mut all_errors = Vec::new();
         let all_processes = self.process_manager.list_processes().await?;
         
-        // Filter processes by access group with hierarchical access
-        let processes: Vec<_> = all_processes
-            .into_iter()
-            .filter(|p| {
-                // If no access group (superuser), show all
-                if access_group.is_none() {
-                    return true;
-                }
-                // Use configurable access checking for read operation
-                crate::utils::check_access(
-                    access_group.as_deref(),
-                    p.access_group.as_deref(),
-                    false,  // read operation
-                    &self.config.access_control.mode
-                )
-            })
-            .collect();
+        // Filter processes by access group if current_dir is true
+        let processes: Vec<_> = if let Some(ref group) = access_group {
+            all_processes
+                .into_iter()
+                .filter(|p| {
+                    crate::utils::check_access(
+                        Some(group),
+                        p.access_group.as_deref(),
+                        false,  // read operation
+                        &self.config.access_control.mode
+                    )
+                })
+                .collect()
+        } else {
+            // Show all processes when current_dir is false
+            all_processes
+        };
 
         for process in processes {
             let query = LogQuery {
@@ -523,10 +542,16 @@ impl ServerHandler for McpServerHandler {
             },
             Tool {
                 name: Cow::Borrowed("list"),
-                description: Some(Cow::Borrowed("List all processes")),
+                description: Some(Cow::Borrowed("List processes")),
                 input_schema: Arc::new(serde_json::from_value(json!({
                     "type": "object",
-                    "properties": {}
+                    "properties": {
+                        "current_dir": {
+                            "type": "boolean",
+                            "description": "Filter to only show processes from current directory",
+                            "default": false
+                        }
+                    }
                 })).unwrap()),
                 annotations: None,
             },
@@ -582,6 +607,11 @@ impl ServerHandler for McpServerHandler {
                         "filter": {
                             "type": "object",
                             "description": "Additional filters"
+                        },
+                        "current_dir": {
+                            "type": "boolean",
+                            "description": "Filter to only show processes from current directory",
+                            "default": false
                         }
                     },
                     "required": ["type"]
@@ -616,7 +646,16 @@ impl ServerHandler for McpServerHandler {
                 };
                 self.handle_spawn(args).await
             }
-            "list" => self.handle_list().await,
+            "list" => {
+                let args: ListArgs = if let Some(args) = request.arguments {
+                    serde_json::from_value(serde_json::Value::Object(args)).map_err(|e| {
+                        McpError::invalid_params(format!("Invalid list arguments: {}", e), None)
+                    })?
+                } else {
+                    ListArgs { current_dir: false }
+                };
+                self.handle_list(args).await
+            }
             "logs" => {
                 let args: LogsArgs = if let Some(args) = request.arguments {
                     serde_json::from_value(serde_json::Value::Object(args)).map_err(|e| {
