@@ -50,6 +50,12 @@ apm stop-all
 
 # Stop all processes without confirmation
 apm stop-all --force
+
+# Clean up stopped processes
+apm clean                          # Clean all stopped processes
+apm clean --older-than 24          # Clean processes stopped >24 hours ago
+apm clean --current-dir            # Clean only from current directory
+apm clean --keep-logs              # Clean but preserve log data
 ```
 
 ## API Usage

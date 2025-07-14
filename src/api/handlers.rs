@@ -120,6 +120,42 @@ pub async fn restart_process(
     }
 }
 
+#[derive(Deserialize)]
+pub struct CleanParams {
+    older_than: Option<u64>,
+    access_group: Option<String>,
+    keep_logs: Option<bool>,
+}
+
+pub async fn clean_processes(
+    Extension(log_storage): Extension<Arc<LogStorage>>,
+    Query(params): Query<CleanParams>,
+) -> impl IntoResponse {
+    let keep_logs = params.keep_logs.unwrap_or(false);
+    
+    match log_storage.clean_stopped_processes(
+        params.older_than,
+        params.access_group.as_deref(),
+        keep_logs,
+    ).await {
+        Ok(cleaned) => {
+            let count = cleaned.len();
+            let names: Vec<String> = cleaned.into_iter().map(|(_, name)| name).collect();
+            (
+                StatusCode::OK,
+                Json(ApiResponse::success(serde_json::json!({
+                    "cleaned": count,
+                    "processes": names
+                }))),
+            ).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<serde_json::Value>::error(e.to_string())),
+        ).into_response(),
+    }
+}
+
 pub async fn get_process_health(
     Extension(process_manager): Extension<Arc<ProcessManager>>,
     Path(id): Path<String>,

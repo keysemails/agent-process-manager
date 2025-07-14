@@ -1,0 +1,15 @@
+# Test configuration for auto-cleanup
+server:
+  host: "0.0.0.0"
+  port: 7337
+
+storage:
+  database_url: "sqlite:test_auto_cleanup.db"
+  log_retention_days: 7
+  max_log_size_mb: 100
+
+cleanup:
+  auto_clean_on_startup: true
+  retention_hours: 0      # Clean all stopped processes
+  keep_logs: false
+  keep_failed: false      # Clean even failed processes

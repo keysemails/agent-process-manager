@@ -23,6 +23,7 @@ pub fn create_router(
         // Process management
         .route("/api/processes", post(handlers::create_process))
         .route("/api/processes", get(handlers::list_processes))
+        .route("/api/processes/clean", post(handlers::clean_processes))
         .route("/api/processes/:id", get(handlers::get_process))
         .route("/api/processes/:id", delete(handlers::stop_process))
         .route("/api/processes/:id/restart", post(handlers::restart_process))

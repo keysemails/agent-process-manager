@@ -46,3 +46,24 @@ mcp:
   tcp_host: "127.0.0.1"  # TCP bind address
   tcp_port: 7338         # TCP port (pairs with HTTP 7337)
   unix_socket: "/tmp/apm.sock"  # Unix socket path
+
+# Access control configuration
+access_control:
+  mode: "open"  # Options: open (default), strict, unrestricted
+  # open: Read all processes, write hierarchically
+  # strict: Both read and write require hierarchical access
+  # unrestricted: Full access to all processes
+
+# Search engine configuration
+search:
+  enabled: true
+  index_path: "./apm_search_index"
+  commit_interval_seconds: 5
+  buffer_size_mb: 50
+
+# Cleanup configuration
+cleanup:
+  auto_clean_on_startup: false  # Clean stopped processes on daemon start
+  retention_hours: 168          # Keep stopped processes for 7 days (0 = forever)
+  keep_logs: false              # Keep logs when cleaning processes
+  keep_failed: true             # Keep processes that failed (non-zero exit)

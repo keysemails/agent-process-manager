@@ -14,6 +14,8 @@ pub struct Config {
     pub access_control: AccessControlConfig,
     #[serde(default)]
     pub search: SearchConfig,
+    #[serde(default)]
+    pub cleanup: CleanupConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -109,6 +111,33 @@ impl Default for AccessControlConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CleanupConfig {
+    /// Automatically clean stopped processes on startup
+    #[serde(default)]
+    pub auto_clean_on_startup: bool,
+    /// Retention period in hours for stopped processes (0 = keep forever)
+    #[serde(default = "default_retention_hours")]
+    pub retention_hours: u64,
+    /// Keep logs when auto-cleaning
+    #[serde(default = "default_keep_logs")]
+    pub keep_logs: bool,
+    /// Keep processes that failed/crashed (non-zero exit code)
+    #[serde(default = "default_keep_failed")]
+    pub keep_failed: bool,
+}
+
+impl Default for CleanupConfig {
+    fn default() -> Self {
+        Self {
+            auto_clean_on_startup: false,
+            retention_hours: default_retention_hours(),
+            keep_logs: default_keep_logs(),
+            keep_failed: default_keep_failed(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SearchConfig {
     /// Enable full-text search indexing
     #[serde(default = "default_search_enabled")]
@@ -171,6 +200,18 @@ fn default_search_buffer_size() -> usize {
     50
 }
 
+fn default_retention_hours() -> u64 {
+    168 // 7 days
+}
+
+fn default_keep_logs() -> bool {
+    false
+}
+
+fn default_keep_failed() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -199,6 +240,7 @@ impl Default for Config {
             },
             access_control: AccessControlConfig::default(),
             search: SearchConfig::default(),
+            cleanup: CleanupConfig::default(),
         }
     }
 }
@@ -230,6 +272,10 @@ impl Config {
             .set_default("search.index_path", "./apm_search_index")?
             .set_default("search.commit_interval_seconds", 5)?
             .set_default("search.buffer_size_mb", 50)?
+            .set_default("cleanup.auto_clean_on_startup", false)?
+            .set_default("cleanup.retention_hours", 168)?
+            .set_default("cleanup.keep_logs", false)?
+            .set_default("cleanup.keep_failed", true)?
             .add_source(config::File::from(std::path::Path::new("apm.yaml")).required(false))
             .add_source(config::Environment::with_prefix("APM"))
             .build()?;
@@ -265,6 +311,10 @@ impl Config {
             .set_default("search.index_path", "./apm_search_index")?
             .set_default("search.commit_interval_seconds", 5)?
             .set_default("search.buffer_size_mb", 50)?
+            .set_default("cleanup.auto_clean_on_startup", false)?
+            .set_default("cleanup.retention_hours", 168)?
+            .set_default("cleanup.keep_logs", false)?
+            .set_default("cleanup.keep_failed", true)?
             .add_source(config::File::from(std::path::Path::new(path)).required(true))
             .add_source(config::Environment::with_prefix("APM"))
             .build()?;

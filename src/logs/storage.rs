@@ -1,6 +1,6 @@
 //! Log storage implementation with dual storage (raw + structured)
 
-use crate::{Result, process::{ProcessId, ProcessStatus, ProcessConfig}};
+use crate::{Result, ApmError, process::{ProcessId, ProcessStatus, ProcessConfig}};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
@@ -558,6 +558,63 @@ impl LogStorage {
             .await?;
         
         Ok(())
+    }
+    
+    pub async fn clean_stopped_processes(
+        &self,
+        older_than_hours: Option<u64>,
+        access_group: Option<&str>,
+        keep_logs: bool,
+    ) -> Result<Vec<(ProcessId, String)>> {
+        // Build the query based on parameters
+        let mut query = String::from("SELECT id, name FROM processes WHERE status = 'Stopped'");
+        let mut bindings = vec![];
+        
+        // Add time filter if specified
+        if let Some(hours) = older_than_hours {
+            query.push_str(" AND stopped_at <= datetime('now', ?)");
+            bindings.push(format!("-{} hours", hours));
+        }
+        
+        // Add access group filter if specified
+        if let Some(group) = access_group {
+            query.push_str(" AND access_group = ?");
+            bindings.push(group.to_string());
+        }
+        
+        // Execute query to get processes to delete
+        let mut sql_query = sqlx::query(&query);
+        for binding in &bindings {
+            sql_query = sql_query.bind(binding);
+        }
+        
+        let rows = sql_query.fetch_all(&self.db).await?;
+        let mut deleted = Vec::new();
+        
+        for row in rows {
+            let id_str: String = row.try_get("id")?;
+            let name: String = row.try_get("name")?;
+            let process_id = ProcessId(id_str.parse().map_err(|e: uuid::Error| 
+                ApmError::Process(format!("Invalid process ID: {}", e)))?);
+            
+            if !keep_logs {
+                // Delete log entries for this process (ignore if table doesn't exist)
+                let _ = sqlx::query("DELETE FROM log_entries WHERE process_id = ?")
+                    .bind(id_str.clone())
+                    .execute(&self.db)
+                    .await;
+            }
+            
+            // Delete the process record
+            sqlx::query("DELETE FROM processes WHERE id = ?")
+                .bind(id_str)
+                .execute(&self.db)
+                .await?;
+                
+            deleted.push((process_id, name));
+        }
+        
+        Ok(deleted)
     }
     
     pub async fn increment_restart_count(&self, id: &ProcessId) -> Result<()> {

@@ -115,6 +115,11 @@ apm stop-all --force              # Stop all processes without confirmation
 apm stop-all --current-dir        # Stop only processes from current directory
 apm restart <name>                # Restart a process (from current directory)
 apm restart <name> --all          # Restart any process
+apm clean                         # Clean all stopped processes (with confirmation)
+apm clean --force                 # Clean without confirmation
+apm clean --older-than 24         # Clean processes stopped >24 hours ago
+apm clean --current-dir           # Clean only from current directory
+apm clean --keep-logs             # Clean but preserve log data
 
 # Interactive
 apm attach <name>                 # Attach to process (uses tmux attach)
@@ -257,6 +262,26 @@ Or use environment variables:
 APM_MCP_ENABLED=1
 APM_MCP_TRANSPORT=tcp
 APM_MCP_TCP_PORT=7338
+```
+
+### Cleanup Configuration
+
+APM supports automatic cleanup of stopped processes on daemon startup:
+
+```yaml
+cleanup:
+  auto_clean_on_startup: true  # Enable auto-cleanup on daemon start
+  retention_hours: 168         # Keep stopped processes for 7 days (0 = keep forever)
+  keep_logs: false             # Delete logs when cleaning processes
+  keep_failed: true            # Keep processes that failed (non-zero exit)
+```
+
+Or use environment variables:
+```bash
+APM_CLEANUP_AUTO_CLEAN_ON_STARTUP=true
+APM_CLEANUP_RETENTION_HOURS=24
+APM_CLEANUP_KEEP_LOGS=false
+APM_CLEANUP_KEEP_FAILED=true
 ```
 
 ### MCP Working Directory Isolation

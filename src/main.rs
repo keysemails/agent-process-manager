@@ -98,6 +98,22 @@ enum Commands {
         force: bool,
     },
     
+    /// Clean up stopped processes
+    Clean {
+        /// Remove stopped processes older than specified hours (e.g., 24 for 1 day)
+        #[arg(long)]
+        older_than: Option<u64>,
+        /// Only clean processes from current directory
+        #[arg(long)]
+        current_dir: bool,
+        /// Keep logs when removing process records
+        #[arg(long)]
+        keep_logs: bool,
+        /// Force cleanup without confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+    
     /// Restart a process
     Restart {
         /// Process name or ID
@@ -173,6 +189,10 @@ async fn main() -> anyhow::Result<()> {
             init_default_logging();
             stop_all_processes_cli(current_dir, force).await
         }
+        Commands::Clean { older_than, current_dir, keep_logs, force } => {
+            init_default_logging();
+            clean_stopped_processes_cli(older_than, current_dir, keep_logs, force).await
+        }
         Commands::Restart { name, all } => {
             init_default_logging();
             restart_process_cli(name, all).await
@@ -236,6 +256,37 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
     let log_storage = Arc::new(
         LogStorage::new_with_search(&config.storage.database_url, search_engine.clone()).await?
     );
+
+    // Perform auto-cleanup if enabled
+    if config.cleanup.auto_clean_on_startup {
+        info!("Performing auto-cleanup of stopped processes...");
+        
+        let retention_hours = if config.cleanup.retention_hours > 0 {
+            Some(config.cleanup.retention_hours)
+        } else {
+            None
+        };
+        
+        match log_storage.clean_stopped_processes(
+            retention_hours,
+            None, // No access group filter for daemon cleanup
+            config.cleanup.keep_logs,
+        ).await {
+            Ok(cleaned) => {
+                if cleaned.is_empty() {
+                    info!("No stopped processes to clean up");
+                } else {
+                    info!("Cleaned up {} stopped processes:", cleaned.len());
+                    for (id, name) in &cleaned {
+                        info!("  - {} ({})", name, id);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to perform auto-cleanup: {}", e);
+            }
+        }
+    }
 
     // Create log channel
     let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(1000);
@@ -933,6 +984,143 @@ async fn stop_all_processes_cli(current_dir_only: bool, force: bool) -> anyhow::
     }
     
     println!("\nStopped {} processes, {} failed", stopped, failed);
+    
+    Ok(())
+}
+
+async fn clean_stopped_processes_cli(
+    older_than: Option<u64>,
+    current_dir_only: bool,
+    keep_logs: bool,
+    force: bool,
+) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    
+    // Get current working directory for filtering if current_dir_only is set
+    let access_group = if current_dir_only {
+        match std::env::current_dir() {
+            Ok(cwd) => Some(agent_process_manager::utils::access_group_from_dir(&cwd)),
+            Err(e) => {
+                eprintln!("Error: Failed to get current directory: {}", e);
+                return Ok(());
+            }
+        }
+    } else {
+        None
+    };
+    
+    // First, get the list of stopped processes that would be cleaned
+    let response = client
+        .get("http://localhost:7337/api/processes")
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        eprintln!("Failed to get processes: {}", response.text().await?);
+        return Ok(());
+    }
+
+    let data: serde_json::Value = response.json().await?;
+    
+    // Filter processes to find what would be cleaned
+    let mut processes_to_clean = Vec::new();
+    if let Some(processes) = data["data"].as_array() {
+        for process in processes {
+            // Only stopped processes
+            if process["status"].as_str() != Some("Stopped") {
+                continue;
+            }
+            
+            // Check access group if current_dir_only
+            if let Some(ref group) = access_group {
+                if process["access_group"].as_str() != Some(group) {
+                    continue;
+                }
+            }
+            
+            // Check age if older_than is specified
+            if let Some(hours) = older_than {
+                if let Some(stopped_at) = process["stopped_at"].as_str() {
+                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(stopped_at) {
+                        let age = chrono::Utc::now().signed_duration_since(dt);
+                        if age.num_hours() < hours as i64 {
+                            continue;
+                        }
+                    }
+                } else {
+                    // No stopped_at time, skip
+                    continue;
+                }
+            }
+            
+            let name = process["name"].as_str().unwrap_or("").to_string();
+            let id = process["id"].as_str().unwrap_or("").to_string();
+            let stopped_at = process["stopped_at"].as_str().unwrap_or("N/A").to_string();
+            
+            processes_to_clean.push((id, name, stopped_at));
+        }
+    }
+    
+    if processes_to_clean.is_empty() {
+        println!("No stopped processes found matching criteria");
+        return Ok(());
+    }
+    
+    // Show what will be cleaned
+    println!("Will clean {} stopped processes:", processes_to_clean.len());
+    for (_, name, stopped_at) in &processes_to_clean {
+        println!("  - {} (stopped at: {})", name, stopped_at);
+    }
+    if !keep_logs {
+        println!("\nWARNING: Logs will also be deleted for these processes!");
+    }
+    
+    // Confirm unless forced
+    if !force {
+        print!("\nAre you sure you want to clean these processes? (y/N): ");
+        use std::io::{self, Write};
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        
+        if input.trim().to_lowercase() != "y" {
+            println!("Cancelled");
+            return Ok(());
+        }
+    }
+    
+    // Send clean request to API
+    let mut query_params = vec![];
+    if let Some(hours) = older_than {
+        query_params.push(format!("older_than={}", hours));
+    }
+    if let Some(ref group) = access_group {
+        query_params.push(format!("access_group={}", group));
+    }
+    if keep_logs {
+        query_params.push("keep_logs=true".to_string());
+    }
+    
+    let url = if query_params.is_empty() {
+        "http://localhost:7337/api/processes/clean".to_string()
+    } else {
+        format!("http://localhost:7337/api/processes/clean?{}", query_params.join("&"))
+    };
+    
+    let response = client
+        .post(&url)
+        .send()
+        .await?;
+        
+    if response.status().is_success() {
+        let result: serde_json::Value = response.json().await?;
+        if let Some(count) = result["cleaned"].as_u64() {
+            println!("\nCleaned {} stopped processes", count);
+        }
+    } else {
+        eprintln!("Failed to clean processes: {}", response.text().await?);
+    }
     
     Ok(())
 }
