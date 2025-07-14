@@ -102,6 +102,15 @@ async function testMCPConnection() {
         });
         console.log('Response:', JSON.stringify(initResponse, null, 2));
 
+        // Send initialized notification (required by MCP protocol)
+        const initializedMsg = {
+            jsonrpc: '2.0',
+            method: 'notifications/initialized',
+            params: {}
+        };
+        client.socket.write(JSON.stringify(initializedMsg) + '\n');
+        console.log('\nSent initialized notification');
+
         // 2. List tools
         console.log('\n2. Listing available tools...');
         const toolsResponse = await client.sendRequest('tools/list', {});

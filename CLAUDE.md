@@ -110,6 +110,9 @@ apm logs <name>                   # View process logs (from current directory)
 apm logs <name> --all             # View logs of any process
 apm stop <name>                   # Stop a process (from current directory)
 apm stop <name> --all             # Stop any process
+apm stop-all                      # Stop all processes (with confirmation)
+apm stop-all --force              # Stop all processes without confirmation
+apm stop-all --current-dir        # Stop only processes from current directory
 apm restart <name>                # Restart a process (from current directory)
 apm restart <name> --all          # Restart any process
 

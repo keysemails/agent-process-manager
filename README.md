@@ -44,6 +44,12 @@ apm logs my-server
 
 # Stop a process
 apm stop my-server
+
+# Stop all processes (with confirmation)
+apm stop-all
+
+# Stop all processes without confirmation
+apm stop-all --force
 ```
 
 ## API Usage

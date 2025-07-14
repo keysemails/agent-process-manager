@@ -88,6 +88,16 @@ enum Commands {
         all: bool,
     },
     
+    /// Stop all processes
+    StopAll {
+        /// Only stop processes from current directory (by default stops all)
+        #[arg(long)]
+        current_dir: bool,
+        /// Force stop without confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+    
     /// Restart a process
     Restart {
         /// Process name or ID
@@ -158,6 +168,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::Stop { name, all } => {
             init_default_logging();
             stop_process_cli(name, all).await
+        }
+        Commands::StopAll { current_dir, force } => {
+            init_default_logging();
+            stop_all_processes_cli(current_dir, force).await
         }
         Commands::Restart { name, all } => {
             init_default_logging();
@@ -790,6 +804,123 @@ async fn restart_process_cli(name: String, show_all: bool) -> anyhow::Result<()>
         eprintln!("Failed to restart process: {}", response.text().await?);
     }
 
+    Ok(())
+}
+
+async fn stop_all_processes_cli(current_dir_only: bool, force: bool) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    
+    // Load config to check access control settings
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(_) => Config::default(),
+    };
+    
+    // Get current working directory for filtering if current_dir_only is set
+    let access_group = if current_dir_only {
+        match std::env::current_dir() {
+            Ok(cwd) => Some(agent_process_manager::utils::access_group_from_dir(&cwd)),
+            Err(e) => {
+                eprintln!("Error: Failed to get current directory: {}", e);
+                return Ok(());
+            }
+        }
+    } else {
+        None
+    };
+    
+    // Get all processes
+    let response = client
+        .get("http://localhost:7337/api/processes")
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        eprintln!("Failed to get processes: {}", response.text().await?);
+        return Ok(());
+    }
+
+    let data: serde_json::Value = response.json().await?;
+    
+    // Filter processes
+    let mut processes_to_stop = Vec::new();
+    if let Some(processes) = data["data"].as_array() {
+        for process in processes {
+            // Skip if already stopped
+            if process["status"].as_str() == Some("Stopped") {
+                continue;
+            }
+            
+            // Filter by access group if current_dir_only is set
+            if let Some(ref group) = access_group {
+                if !agent_process_manager::utils::check_access(
+                    Some(group),
+                    process["access_group"].as_str(),
+                    true,  // write operation
+                    &config.access_control.mode
+                ) {
+                    continue;
+                }
+            }
+            
+            processes_to_stop.push((
+                process["id"].as_str().unwrap_or("").to_string(),
+                process["name"].as_str().unwrap_or("").to_string(),
+            ));
+        }
+    }
+    
+    if processes_to_stop.is_empty() {
+        if current_dir_only {
+            println!("No running processes found in current directory");
+        } else {
+            println!("No running processes found");
+        }
+        return Ok(());
+    }
+    
+    // Show what will be stopped
+    println!("Will stop {} processes:", processes_to_stop.len());
+    for (_, name) in &processes_to_stop {
+        println!("  - {}", name);
+    }
+    
+    // Confirm unless forced
+    if !force {
+        print!("\nAre you sure you want to stop all these processes? (y/N): ");
+        use std::io::{self, Write};
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        
+        if input.trim().to_lowercase() != "y" {
+            println!("Cancelled");
+            return Ok(());
+        }
+    }
+    
+    // Stop all processes
+    let mut stopped = 0;
+    let mut failed = 0;
+    
+    for (id, name) in processes_to_stop {
+        let response = client
+            .delete(&format!("http://localhost:7337/api/processes/{}", id))
+            .send()
+            .await?;
+            
+        if response.status().is_success() {
+            println!("Stopped: {}", name);
+            stopped += 1;
+        } else {
+            eprintln!("Failed to stop {}: {}", name, response.text().await?);
+            failed += 1;
+        }
+    }
+    
+    println!("\nStopped {} processes, {} failed", stopped, failed);
+    
     Ok(())
 }
 

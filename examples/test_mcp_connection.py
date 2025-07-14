@@ -68,6 +68,15 @@ def test_mcp_connection():
             }, msg_id=1)
             print(f"Response: {json.dumps(response, indent=2)}")
             
+            # Send initialized notification (required by MCP protocol)
+            initialized_msg = {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {}
+            }
+            sock.sendall((json.dumps(initialized_msg) + "\n").encode())
+            print("\nSent initialized notification")
+            
             # 2. List tools
             print("\n2. Listing available tools...")
             response = send_json_rpc(sock, "tools/list", {}, msg_id=2)
