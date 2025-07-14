@@ -79,6 +79,8 @@ strip-ansi-escapes = "0.2"
 # Terminal UI
 # ratatui = "0.28"
 crossterm = "0.28"
+terminal_size = "0.3"
+colored = "2.1"
 
 # Full-text search
 tantivy = "0.22"

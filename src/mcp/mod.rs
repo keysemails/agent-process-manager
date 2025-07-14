@@ -125,12 +125,12 @@ impl McpServerHandler {
     async fn handle_spawn(&self, args: SpawnArgs) -> CallToolResult {
         debug!("MCP spawn tool called: {:?}", args);
 
-        // Get the current working directory for access control
-        let access_group = match std::env::current_dir() {
-            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+        // Get the current working directory for access control and process config
+        let (access_group, cwd) = match std::env::current_dir() {
+            Ok(cwd) => (Some(crate::utils::access_group_from_dir(&cwd)), Some(cwd)),
             Err(e) => {
                 error!("Failed to get current directory: {}", e);
-                None
+                (None, None)
             }
         };
 
@@ -138,7 +138,7 @@ impl McpServerHandler {
             name: args.name.clone(),
             command: args.command,
             args: args.args,
-            cwd: None,
+            cwd,
             env: HashMap::new(),
             tags: vec![],
             pty: false,
@@ -210,7 +210,9 @@ impl McpServerHandler {
                             "uptime_seconds": info.uptime_seconds,
                             "restart_count": info.restart_count,
                             "cpu_percent": info.cpu_percent,
-                            "memory_mb": info.memory_mb
+                            "memory_mb": info.memory_mb,
+                            "cwd": info.cwd,
+                            "detected_ports": info.detected_ports
                         })
                     })
                     .collect();

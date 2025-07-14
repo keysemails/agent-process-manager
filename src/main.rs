@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tracing::{info, error, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use colored::*;
 use tokio::net::TcpStream;
 
 #[derive(Parser)]
@@ -50,6 +51,12 @@ enum Commands {
         /// Show all processes regardless of working directory
         #[arg(long)]
         all: bool,
+        /// Wrap long directory paths instead of truncating
+        #[arg(long)]
+        wrap: bool,
+        /// Output format (table, json, csv)
+        #[arg(long, default_value = "table")]
+        format: String,
     },
     
     /// Show process logs
@@ -165,9 +172,9 @@ async fn main() -> anyhow::Result<()> {
             init_default_logging();
             start_process_cli(name, command, args, tag, pty).await
         }
-        Commands::List { all } => {
+        Commands::List { all, wrap, format } => {
             init_default_logging();
-            list_processes_cli(all).await
+            list_processes_cli(all, wrap, format).await
         }
         Commands::Logs { name, errors, follow, all } => {
             init_default_logging();
@@ -392,11 +399,14 @@ async fn start_process_cli(
         }
     };
     
+    // Get current working directory to set in process config
+    let cwd = std::env::current_dir().ok();
+    
     let config = agent_process_manager::process::ProcessConfig {
         name: name.clone(),
         command,
         args,
-        cwd: None,
+        cwd,
         env: std::collections::HashMap::new(),
         tags,
         pty,
@@ -422,7 +432,7 @@ async fn start_process_cli(
     Ok(())
 }
 
-async fn list_processes_cli(show_all: bool) -> anyhow::Result<()> {
+async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     
     // Load config to check access control settings
@@ -452,44 +462,195 @@ async fn list_processes_cli(show_all: bool) -> anyhow::Result<()> {
             None
         };
         
-        println!("{:<20} {:<10} {:<10} {:<10} {:<20}", "NAME", "STATUS", "PID", "UPTIME", "STARTED");
-        println!("{}", "-".repeat(70));
-        
         if let Some(processes) = data["data"].as_array() {
-            for process in processes {
-                // Filter by access group if not showing all
-                if let Some(ref group) = access_group {
-                    // Use new check_access function for read operation
-                    if !agent_process_manager::utils::check_access(
-                        Some(group),
-                        process["access_group"].as_str(),
-                        false,  // read operation
-                        &config.access_control.mode
-                    ) {
-                        continue;
+            // Filter processes based on access group
+            let filtered_processes: Vec<&serde_json::Value> = processes.iter()
+                .filter(|process| {
+                    if let Some(ref group) = access_group {
+                        agent_process_manager::utils::check_access(
+                            Some(group),
+                            process["access_group"].as_str(),
+                            false,  // read operation
+                            &config.access_control.mode
+                        )
+                    } else {
+                        true
+                    }
+                })
+                .collect();
+            
+            match format.as_str() {
+                "json" => {
+                    // JSON output
+                    let json_output = serde_json::to_string_pretty(&filtered_processes)?;
+                    println!("{}", json_output);
+                }
+                "csv" => {
+                    // CSV output
+                    println!("name,status,pid,uptime_seconds,started_at,ports,directory");
+                    for process in filtered_processes {
+                        let name = process["name"].as_str().unwrap_or("");
+                        let status = process["status"].as_str().unwrap_or("");
+                        let pid = process["pid"].as_u64().unwrap_or(0);
+                        let uptime = process["uptime_seconds"].as_u64().unwrap_or(0);
+                        let started = process["started_at"].as_str().unwrap_or("");
+                        let ports = if let Some(ports) = process["detected_ports"].as_array() {
+                            ports.iter()
+                                .filter_map(|p| p.as_u64().map(|n| n.to_string()))
+                                .collect::<Vec<_>>()
+                                .join(";")
+                        } else {
+                            String::new()
+                        };
+                        let cwd = process["cwd"].as_str().unwrap_or("");
+                        println!("{},{},{},{},{},{},{}", name, status, pid, uptime, started, ports, cwd);
                     }
                 }
-                
-                // Format the started_at time
-                let started_str = if let Some(started_at) = process["started_at"].as_str() {
-                    // Parse and format the timestamp to a more readable format
-                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(started_at) {
-                        dt.format("%Y-%m-%d %H:%M:%S").to_string()
+                _ => {
+                    // Table output (default)
+                    // Get terminal width to dynamically adjust directory column
+                    let term_width = terminal_size::terminal_size()
+                        .map(|(terminal_size::Width(w), _)| w as usize)
+                        .unwrap_or(80);
+                    
+                    let fixed_width = 65;
+                    let dir_width = if wrap {
+                        // If wrapping, use more space for directory
+                        if term_width > fixed_width + 10 {
+                            term_width - fixed_width - 5
+                        } else {
+                            30
+                        }
                     } else {
-                        started_at.to_string()
+                        // Normal truncated mode
+                        if term_width > fixed_width + 10 {
+                            term_width - fixed_width - 5
+                        } else {
+                            15
+                        }
+                    };
+                    
+                    println!("{:<15} {:<8} {:<8} {:<8} {:<10} {:<10} {:<width$}", 
+                        "NAME", "STATUS", "PID", "UPTIME", "STARTED", "PORTS", "DIRECTORY",
+                        width = dir_width
+                    );
+                    println!("{}", "-".repeat(fixed_width + dir_width));
+                    
+                    for process in filtered_processes {
+                
+                // Format the started_at time as relative time
+                let started_str = if let Some(started_at) = process["started_at"].as_str() {
+                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(started_at) {
+                        let now = chrono::Utc::now();
+                        let duration = now.signed_duration_since(dt);
+                        
+                        if duration.num_seconds() < 60 {
+                            format!("{}s ago", duration.num_seconds())
+                        } else if duration.num_minutes() < 60 {
+                            format!("{}m ago", duration.num_minutes())
+                        } else if duration.num_hours() < 24 {
+                            format!("{}h ago", duration.num_hours())
+                        } else {
+                            format!("{}d ago", duration.num_days())
+                        }
+                    } else {
+                        "N/A".to_string()
                     }
                 } else {
                     "N/A".to_string()
                 };
                 
-                println!(
-                    "{:<20} {:<10} {:<10} {:<10} {:<20}",
-                    process["name"].as_str().unwrap_or(""),
-                    process["status"].as_str().unwrap_or(""),
-                    process["pid"].as_u64().unwrap_or(0),
-                    format!("{}s", process["uptime_seconds"].as_u64().unwrap_or(0)),
-                    started_str
-                );
+                // Format detected ports
+                let ports_str = if let Some(ports) = process["detected_ports"].as_array() {
+                    let port_numbers: Vec<String> = ports.iter()
+                        .filter_map(|p| p.as_u64().map(|n| n.to_string()))
+                        .collect();
+                    if port_numbers.is_empty() {
+                        "-".to_string()
+                    } else {
+                        port_numbers.join(", ")
+                    }
+                } else {
+                    "-".to_string()
+                };
+                
+                // Format working directory based on available width and wrap option
+                let cwd_str = if let Some(cwd) = process["cwd"].as_str() {
+                    if wrap {
+                        // In wrap mode, show full path
+                        cwd.to_string()
+                    } else {
+                        // Shorten path if too long
+                        if cwd.len() > dir_width.saturating_sub(2) {
+                            let keep_chars = dir_width.saturating_sub(5); // Room for "..."
+                            if keep_chars > 0 {
+                                format!("...{}", &cwd[cwd.len().saturating_sub(keep_chars)..])
+                            } else {
+                                "...".to_string()
+                            }
+                        } else {
+                            cwd.to_string()
+                        }
+                    }
+                } else {
+                    "-".to_string()
+                };
+                
+                // Format name - truncate if too long
+                let name_str = process["name"].as_str().unwrap_or("");
+                let name_display = if name_str.len() > 14 {
+                    format!("{}...", &name_str[..11])
+                } else {
+                    name_str.to_string()
+                };
+                
+                // Color code the status
+                let status = process["status"].as_str().unwrap_or("");
+                let status_colored = match status {
+                    "Running" => status.green(),
+                    "Stopped" => status.yellow(),
+                    "Failed" => status.red(),
+                    "Starting" => status.cyan(),
+                    "Restarting" => status.blue(),
+                    _ => status.normal(),
+                };
+                
+                // Color ports if any are detected
+                let ports_colored = if ports_str == "-" {
+                    ports_str.dimmed()
+                } else {
+                    ports_str.bright_cyan()
+                };
+                
+                if wrap && cwd_str.len() > dir_width {
+                    // Multi-line output for wrapped mode
+                    println!(
+                        "{:<15} {:<8} {:<8} {:<8} {:<10} {:<10}",
+                        name_display,
+                        status_colored,
+                        process["pid"].as_u64().unwrap_or(0),
+                        format!("{}s", process["uptime_seconds"].as_u64().unwrap_or(0)),
+                        started_str,
+                        ports_colored
+                    );
+                    // Print wrapped directory on next line with indent
+                    println!("    {}", cwd_str.dimmed());
+                } else {
+                    // Single line output
+                    println!(
+                        "{:<15} {:<8} {:<8} {:<8} {:<10} {:<10} {:<width$}",
+                        name_display,
+                        status_colored,
+                        process["pid"].as_u64().unwrap_or(0),
+                        format!("{}s", process["uptime_seconds"].as_u64().unwrap_or(0)),
+                        started_str,
+                        ports_colored,
+                        cwd_str.dimmed(),
+                        width = dir_width
+                    );
+                }
+                    }
+                }
             }
         }
     } else {

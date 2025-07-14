@@ -159,6 +159,8 @@ impl ProcessManager {
             cpu_percent,
             memory_mb,
             access_group: process.config.access_group.clone(),
+            cwd: process.config.cwd.clone(),
+            detected_ports: vec![], // Will be populated as logs are processed
         };
 
         // Store process in database
@@ -450,6 +452,13 @@ impl ProcessManager {
             (None, None)
         };
         
+        // Get detected ports from log summary
+        let detected_ports = if let Ok(summary) = self.storage.get_summary(&process_record.id).await {
+            summary.detected_ports
+        } else {
+            vec![]
+        };
+        
         Ok(ProcessInfo {
             id: process_record.id.clone(),
             name: process_record.config.name.clone(),
@@ -464,6 +473,8 @@ impl ProcessManager {
             cpu_percent,
             memory_mb,
             access_group: process_record.config.access_group.clone(),
+            cwd: process_record.config.cwd.clone(),
+            detected_ports,
         })
     }
 
@@ -495,6 +506,17 @@ impl ProcessManager {
                 (None, None)
             };
             
+            // Get detected ports from log summary (only for running processes to avoid too many queries)
+            let detected_ports = if proc.status == ProcessStatus::Running {
+                if let Ok(summary) = self.storage.get_summary(&proc.id).await {
+                    summary.detected_ports
+                } else {
+                    vec![]
+                }
+            } else {
+                vec![]
+            };
+            
             infos.push(ProcessInfo {
                 id: proc.id.clone(),
                 name: proc.config.name.clone(),
@@ -509,6 +531,8 @@ impl ProcessManager {
                 cpu_percent,
                 memory_mb,
                 access_group: proc.config.access_group.clone(),
+                cwd: proc.config.cwd.clone(),
+                detected_ports,
             });
         }
 
@@ -615,6 +639,8 @@ impl ProcessManager {
             cpu_percent,
             memory_mb,
             access_group: config.access_group.clone(),
+            cwd: config.cwd.clone(),
+            detected_ports: vec![], // Will be populated as logs are processed
         };
 
         // Start monitoring the process output

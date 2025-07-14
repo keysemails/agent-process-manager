@@ -40,6 +40,10 @@ pub struct ProcessInfo {
     pub memory_mb: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access_group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub detected_ports: Vec<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
