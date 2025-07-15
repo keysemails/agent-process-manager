@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "agent-process-manager": {
+      "args": [
+        "mcp-bridge"
+      ],
+      "command": "apm",
+      "env": {
+        "RUST_LOG": "warn"
+      }
+    }
+  }
+}

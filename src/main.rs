@@ -1566,8 +1566,17 @@ This project uses Agent Process Manager (APM) for all background processes.
 
 - Check running processes: `apm list`
 - View logs: `apm logs <name>`
+- Search logs: `apm logs <name> --search "error"`
 - Stop processes: `apm stop <name>`
 - Stop all: `apm stop-all --current-dir`
+
+### Advanced Debugging (MCP Tools)
+
+When connected via MCP, you have access to powerful query capabilities:
+- **Search across all processes**: `query` tool with `type: "log_search"` and `pattern: "your search"`
+- **Find port usage**: `query` tool with `type: "port_mapping"` to see which processes use which ports
+- **Check performance**: `query` tool with `type: "performance_metrics"` to find high CPU/memory usage
+- **Filter logs**: `logs` tool supports `search`, `level` (error/warn/info), and `since` parameters
 
 See: https://github.com/sunnya97/agent-process-manager/blob/main/APM_FOR_AI_ASSISTANTS.md
 "#, examples.iter().map(|e| format!("- {}", e)).collect::<Vec<_>>().join("\n"));
@@ -1821,8 +1830,15 @@ CRITICAL: This system uses Agent Process Manager (APM) for all long-running proc
 ### Process Management:
 - List processes: `apm list`
 - View logs: `apm logs <name>`
+- Search logs: `apm logs <name> --search "pattern"`
 - Stop processes: `apm stop <name>`
 - Check status: `apm status`
+
+### MCP Tools for Advanced Debugging:
+When using APM through MCP, you have access to powerful tools:
+- **query**: Search logs across all processes, find port usage, check performance
+- **logs**: Enhanced filtering with search, level (error/warn/info), and time ranges
+- **restart**: Restart processes without losing configuration
 
 For complete instructions: https://github.com/sunnya97/agent-process-manager/blob/main/APM_FOR_AI_ASSISTANTS.md
 

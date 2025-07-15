@@ -25,5 +25,9 @@
       "Bash(mv:*)"
     ],
     "deny": []
-  }
+  },
+  "enabledMcpjsonServers": [
+    "agent-process-manager"
+  ],
+  "enableAllProjectMcpServers": true
 }

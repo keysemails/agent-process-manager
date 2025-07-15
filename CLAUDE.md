@@ -92,8 +92,64 @@ GET    /health                     # Health check
 APM runs an MCP server by default that AI assistants can connect to:
 - **TCP Mode**: Listens on `tcp://127.0.0.1:7338` by default
 - **Unix Socket Mode**: Listens on `/tmp/apm.sock` by default
-- **Tools Available**: spawn, list, logs, stop, query
 - **Transport**: TCP or Unix socket (no longer uses stdio)
+
+#### MCP Tools Available:
+
+1. **spawn** - Start a new process
+   - `name`: Process name (required)
+   - `command`: Command to execute (required)
+   - `args`: Command arguments (optional)
+
+2. **list** - List processes with health metrics
+   - `current_dir`: Filter to current directory only (optional, default: false)
+   - Returns: id, name, command, status, cpu_percent, memory_mb, detected_ports
+
+3. **logs** - Get process logs with filtering
+   - `process_id`: Process ID (required)
+   - `limit`: Max log entries (optional, default: 100)
+   - `search`: Text pattern filter (optional)
+   - `level`: Log level filter - debug/info/warn/error (optional)
+   - `since`: RFC3339 timestamp for time filtering (optional)
+
+4. **stop** - Stop a single process
+   - `process_id`: Process ID (required)
+
+5. **restart** - Restart a process
+   - `process_id`: Process ID (required)
+   - Returns: new process_id, restart_count
+
+6. **stop_multiple** - Stop multiple processes
+   - `current_dir`: Only stop processes from current directory (optional)
+   - `names`: List of process names to stop (optional)
+   - `force`: Skip confirmation (optional)
+   - Returns: stopped count, failed count, errors
+
+7. **clean** - Clean stopped processes
+   - `older_than`: Hours threshold (optional)
+   - `keep_logs`: Preserve logs when cleaning (optional, default: false)
+   - `current_dir`: Only clean from current directory (optional)
+   - Returns: cleaned count, process names
+
+8. **query** - Structured queries for AI agents
+   - `type`: Query type (required) - one of:
+     - `system_overview`: Overall system status
+     - `process_errors`: Error analysis across processes
+     - `port_mapping`: Port and URL usage mapping
+     - `performance_metrics`: CPU/memory metrics and alerts
+     - `log_search`: Search logs across processes
+     - `event_correlation`: Correlate events across processes
+   - Common parameters:
+     - `current_dir`: Filter to current directory (optional)
+   - Query-specific parameters:
+     - `time_window`: For time-based queries (e.g., '5m', '1h')
+     - `process_filter`: Filter by process names
+     - `include_urls`: Include URLs in port_mapping
+     - `metrics`: Metrics to include ['cpu', 'memory']
+     - `pattern`: Search pattern for log_search (required for log_search)
+     - `limit`: Result limit for log_search
+     - `event_types`: Event types for correlation (required for event_correlation)
+     - `min_severity`: Minimum severity for process_errors
 
 ## CLI Commands
 
@@ -399,6 +455,49 @@ MCP clients automatically inherit working directory-based isolation with hierarc
 - MCP clients in parent directories can manage subdirectory processes
 - Example: An MCP client in `/project` can manage processes from `/project/backend`
 
+### Enhanced MCP Capabilities for AI Agents
+
+The MCP interface now provides comprehensive process management capabilities optimized for AI agent usage:
+
+1. **Efficient Context Usage**: All queries return structured, summarized data to minimize token consumption
+2. **Advanced Log Filtering**: Search, filter by level, and time-based queries reduce noise
+3. **Batch Operations**: `stop_multiple` and `clean` tools enable efficient bulk management
+4. **Health Monitoring**: CPU and memory metrics included in list output for proactive monitoring
+5. **Structured Queries**: The `query` tool provides 6 specialized query types for different analysis needs
+6. **Pattern Detection**: Automatic extraction of ports, URLs, errors, and key events
+
+#### Example MCP Usage for AI Agents:
+
+```javascript
+// Find all processes using high CPU
+const result = await mcp.call('query', {
+  type: 'performance_metrics',
+  metrics: ['cpu'],
+  current_dir: false
+});
+
+// Search for specific errors across all processes
+const errors = await mcp.call('query', {
+  type: 'log_search',
+  pattern: 'connection refused',
+  limit: 20
+});
+
+// Get filtered logs with level and time constraints
+const logs = await mcp.call('logs', {
+  process_id: '12345',
+  level: 'error',
+  since: '2024-01-01T00:00:00Z',
+  limit: 50
+});
+
+// Clean up old stopped processes
+const cleaned = await mcp.call('clean', {
+  older_than: 24,  // hours
+  keep_logs: false
+});
+```
+
 ### Adding New Features
 
 1. **Pattern Detection**: Add new patterns in `src/logs/patterns.rs`
@@ -684,3 +783,27 @@ Current development priorities are tracked in GitHub Issues. Key areas include:
 - Log rotation and archival ([Issue #4](https://github.com/sunnya97/agent-process-manager/issues/4))
 - Enhanced AI Agent API ([Issue #1](https://github.com/sunnya97/agent-process-manager/issues/1))
 - Plugin system for custom patterns ([Issue #9](https://github.com/sunnya97/agent-process-manager/issues/9))
+## Process Management with APM
+
+This project uses Agent Process Manager (APM) for all background processes.
+**NEVER run development servers or long-running processes directly**.
+
+### Critical Rules
+
+- NEVER run `npm run dev`, `npm start`, `yarn dev` directly
+- NEVER run `python manage.py runserver`, `flask run` directly  
+- NEVER run commands that don't terminate naturally
+
+### Use APM Instead
+
+- cargo run → apm spawn app cargo run
+- cargo watch -x run → apm spawn dev cargo watch -x run
+
+### Common Commands
+
+- Check running processes: `apm list`
+- View logs: `apm logs <name>`
+- Stop processes: `apm stop <name>`
+- Stop all: `apm stop-all --current-dir`
+
+See: https://github.com/sunnya97/agent-process-manager/blob/main/APM_FOR_AI_ASSISTANTS.md
