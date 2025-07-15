@@ -46,6 +46,9 @@ pub fn create_router(
         // Health check
         .route("/health", get(handlers::health_check))
         
+        // System control
+        .route("/api/shutdown", post(handlers::shutdown_daemon))
+        
         // Add shared state
         .layer(Extension(process_manager))
         .layer(Extension(log_storage));

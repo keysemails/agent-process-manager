@@ -86,6 +86,13 @@ enum Commands {
     /// Get system status
     Status,
     
+    /// Shutdown the APM daemon
+    Shutdown {
+        /// Force shutdown without confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+    
     /// Stop a process
     Stop {
         /// Process name or ID
@@ -226,6 +233,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status => {
             init_default_logging();
             show_status_cli().await
+        }
+        Commands::Shutdown { force } => {
+            init_default_logging();
+            shutdown_cli(force).await
         }
         Commands::Stop { name, all } => {
             init_default_logging();
@@ -912,6 +923,74 @@ async fn show_status_cli() -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+async fn shutdown_cli(force: bool) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    
+    // First check if daemon is running
+    match client
+        .get("http://localhost:7337/health")
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+    {
+        Ok(_) => {
+            // Daemon is running, proceed with shutdown
+            if !force {
+                // Ask for confirmation
+                use dialoguer::Confirm;
+                let confirmed = Confirm::new()
+                    .with_prompt("Are you sure you want to shutdown the APM daemon?")
+                    .default(false)
+                    .interact()?;
+                
+                if !confirmed {
+                    println!("Shutdown cancelled");
+                    return Ok(());
+                }
+            }
+            
+            println!("Shutting down APM daemon...");
+            
+            // Send shutdown request
+            match client
+                .post("http://localhost:7337/api/shutdown")
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        println!("✅ APM daemon shutdown initiated");
+                        
+                        // Wait a moment and verify it's down
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        
+                        match client
+                            .get("http://localhost:7337/health")
+                            .timeout(std::time::Duration::from_secs(1))
+                            .send()
+                            .await
+                        {
+                            Ok(_) => println!("⚠️  Daemon may still be running"),
+                            Err(_) => println!("✅ Daemon stopped successfully"),
+                        }
+                    } else {
+                        eprintln!("❌ Failed to shutdown daemon: HTTP {}", response.status());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to send shutdown request: {}", e);
+                }
+            }
+        }
+        Err(_) => {
+            println!("APM daemon is not running");
+        }
+    }
+    
     Ok(())
 }
 

@@ -10,6 +10,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use tokio::time::{sleep, Duration};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -981,4 +982,18 @@ pub async fn search_logs(
             Json(ApiResponse::<serde_json::Value>::error(e.to_string())),
         ).into_response(),
     }
+}
+
+// Shutdown daemon endpoint
+pub async fn shutdown_daemon() -> impl IntoResponse {
+    // Respond immediately to the client
+    let response = (StatusCode::OK, Json(ApiResponse::success("APM daemon shutting down")));
+    
+    // Schedule shutdown after a brief delay to allow response to be sent
+    tokio::spawn(async {
+        sleep(Duration::from_millis(100)).await;
+        std::process::exit(0);
+    });
+    
+    response
 }
