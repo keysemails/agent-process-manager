@@ -1445,6 +1445,7 @@ async fn setup_claude_local(yes: bool, dry_run: bool) -> anyhow::Result<()> {
     println!("  1. Creating/updating CLAUDE.md in this directory");
     println!("  2. Adding APM usage instructions for Claude");
     println!("  3. Detecting your project type and adding relevant examples");
+    println!("  4. Creating .mcp.json to configure the APM MCP tool");
     
     if !yes {
         let proceed = Confirm::with_theme(&ColorfulTheme::default())
@@ -1608,12 +1609,70 @@ This file contains instructions for AI assistants working on this project.
         println!("✓ Created CLAUDE.md with APM configuration");
     }
     
+    // Create .mcp.json for project-scoped MCP configuration
+    println!("\n📦 Configuring MCP for this project...");
+    
+    let mcp_config = serde_json::json!({
+        "mcpServers": {
+            "agent-process-manager": {
+                "command": "apm",
+                "args": ["mcp-bridge"],
+                "env": {
+                    "RUST_LOG": "warn"
+                }
+            }
+        }
+    });
+    
+    let mcp_path = Path::new(".mcp.json");
+    let mcp_exists = mcp_path.exists();
+    
+    if mcp_exists {
+        // Read existing config and check if APM is already configured
+        let existing_content = fs::read_to_string(mcp_path).await?;
+        match serde_json::from_str::<serde_json::Value>(&existing_content) {
+            Ok(mut existing_config) => {
+                if existing_config.get("mcpServers")
+                    .and_then(|servers| servers.get("agent-process-manager"))
+                    .is_some() {
+                    println!("✓ MCP already configured for APM in .mcp.json");
+                } else {
+                    // Merge APM config into existing config
+                    if let Some(servers) = existing_config.get_mut("mcpServers").and_then(|s| s.as_object_mut()) {
+                        servers.insert("agent-process-manager".to_string(), mcp_config["mcpServers"]["agent-process-manager"].clone());
+                    } else {
+                        existing_config["mcpServers"] = mcp_config["mcpServers"].clone();
+                    }
+                    
+                    let pretty_json = serde_json::to_string_pretty(&existing_config)?;
+                    fs::write(mcp_path, pretty_json).await?;
+                    println!("✓ Added APM to existing .mcp.json");
+                }
+            }
+            Err(_) => {
+                println!("⚠️  Existing .mcp.json is invalid, creating backup...");
+                fs::rename(mcp_path, ".mcp.json.backup").await?;
+                let pretty_json = serde_json::to_string_pretty(&mcp_config)?;
+                fs::write(mcp_path, pretty_json).await?;
+                println!("✓ Created new .mcp.json (old file backed up)");
+            }
+        }
+    } else {
+        // Create new .mcp.json
+        let pretty_json = serde_json::to_string_pretty(&mcp_config)?;
+        fs::write(mcp_path, pretty_json).await?;
+        println!("✓ Created .mcp.json with APM configuration");
+    }
+    
     println!("\n✅ {}", "Local setup complete!".green().bold());
     println!("\nClaude will now use APM for long-running processes in this project.");
     println!("Team members will get the same setup when they clone this repo.");
     
+    println!("\n⚠️  {}: Restart Claude Code for MCP changes to take effect", "Important".yellow().bold());
+    
     println!("\n💡 Tips:");
     println!("- Customize CLAUDE.md for your specific needs");
+    println!("- The .mcp.json file configures MCP tools for this project");
     println!("- Run 'apm setup-claude --check' to verify setup");
     println!("- Use 'apm setup-claude --global' for system-wide configuration");
     
@@ -1842,6 +1901,28 @@ async fn check_claude_setup() -> anyhow::Result<()> {
         }
     } else {
         println!("  ✗ No CLAUDE.md file in current directory");
+    }
+    
+    // Check local MCP configuration
+    let local_mcp = Path::new(".mcp.json");
+    if local_mcp.exists() {
+        let content = fs::read_to_string(local_mcp).await?;
+        match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(config) => {
+                if config.get("mcpServers")
+                    .and_then(|servers| servers.get("agent-process-manager"))
+                    .is_some() {
+                    println!("  ✓ .mcp.json configured with APM");
+                } else {
+                    println!("  ✗ .mcp.json exists but lacks APM configuration");
+                }
+            }
+            Err(_) => {
+                println!("  ✗ .mcp.json exists but is invalid");
+            }
+        }
+    } else {
+        println!("  ✗ No .mcp.json file in current directory");
     }
     
     // Check global setup
