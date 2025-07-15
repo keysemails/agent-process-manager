@@ -1,11 +1,14 @@
 [package]
 name = "agent-process-manager"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 edition = "2021"
 authors = ["APM Contributors"]
 description = "An AI-native process manager for efficient agent-process interaction"
-license = "MIT"
-repository = "https://github.com/agent-process-manager/apm"
+repository = "https://github.com/sunnya97/agent-process-manager"
+homepage = "https://github.com/sunnya97/agent-process-manager"
+documentation = "https://github.com/sunnya97/agent-process-manager#readme"
+keywords = ["process-manager", "ai", "mcp", "daemon", "cli"]
+categories = ["development-tools", "command-line-utilities"]
 
 [[bin]]
 name = "apm"

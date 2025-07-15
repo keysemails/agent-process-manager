@@ -13,7 +13,7 @@ use tokio::net::TcpStream;
 
 #[derive(Parser)]
 #[command(name = "apm")]
-#[command(version = "0.1.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Agent Process Manager - AI-native process management", long_about = None)]
 struct Cli {
     #[command(subcommand)]
