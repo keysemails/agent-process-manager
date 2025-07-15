@@ -121,6 +121,12 @@ apm clean --older-than 24         # Clean processes stopped >24 hours ago
 apm clean --current-dir           # Clean only from current directory
 apm clean --keep-logs             # Clean but preserve log data
 
+# Configuration Management
+apm config init                   # Create user config file with defaults
+apm config init --force           # Overwrite existing config file
+apm config path                   # Show which config file is active
+apm config edit                   # Edit config file in $EDITOR
+
 # Interactive
 apm attach <name>                 # Attach to process (uses tmux attach)
 ```
@@ -174,7 +180,7 @@ apm list                          # Shows all processes under /home/user
 
 ### Configurable Access Control Modes
 
-APM supports three access control modes that can be configured in `apm.yaml`:
+APM supports three access control modes that can be configured in your config file:
 
 1. **Open Mode** (`mode: "open"`) - Default and recommended for most users
    - **Read operations** (list, logs): Can see all processes regardless of directory
@@ -244,9 +250,92 @@ curl -X POST http://localhost:7337/api/agent/query \
 nc localhost 7338
 ```
 
+## Configuration Management
+
+APM uses a global configuration system following platform-specific conventions for config directories. Configuration files are searched in order of precedence:
+
+1. **User config**: `~/.config/apm/config.yaml` (Linux/Unix) or `~/Library/Application Support/apm/config.yaml` (macOS)
+2. **System config**: `/etc/apm/config.yaml` 
+3. **Environment variables**: `APM_*` prefixed variables (highest precedence)
+
+### Configuration Commands
+
+```bash
+# Initialize user config directory and create default config file
+apm config init
+
+# Show which config file is currently active
+apm config path
+
+# Edit the active config file in $EDITOR
+apm config edit
+
+# Force overwrite existing config during init
+apm config init --force
+```
+
+### Configuration File Format
+
+The config file uses YAML format with all APM settings:
+
+```yaml
+# APM Configuration File
+server:
+  host: "0.0.0.0"
+  port: 7337
+
+storage:
+  database_url: "sqlite:apm.db"
+  log_retention_days: 7
+  max_log_size_mb: 1000
+
+ui:
+  theme: "dark"
+  dashboard_auth: "none"
+
+mcp:
+  enabled: false
+  transport: "tcp"
+  tcp_host: "127.0.0.1"
+  tcp_port: 7338
+  unix_socket: "/tmp/apm.sock"
+
+access_control:
+  mode: "open"  # open, strict, or unrestricted
+
+search:
+  enabled: true
+  index_path: "./apm_search_index"
+  commit_interval_seconds: 5
+  buffer_size_mb: 50
+
+cleanup:
+  auto_clean_on_startup: false
+  retention_hours: 168  # 7 days
+  keep_logs: false
+  keep_failed: true
+```
+
+### Environment Variable Overrides
+
+Any configuration setting can be overridden using environment variables with the `APM_` prefix:
+
+```bash
+# Override MCP settings
+APM_MCP_ENABLED=true
+APM_MCP_TCP_PORT=9999
+
+# Override server settings
+APM_SERVER_PORT=8080
+APM_SERVER_HOST=127.0.0.1
+
+# Override storage settings  
+APM_STORAGE_DATABASE_URL="sqlite:custom.db"
+```
+
 ### MCP Configuration
 
-To enable MCP server alongside HTTP API, configure in `apm.yaml`:
+To enable MCP server alongside HTTP API, add to your config file:
 
 ```yaml
 mcp:

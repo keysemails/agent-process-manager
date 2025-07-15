@@ -1,6 +1,7 @@
 //! Configuration management
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -247,14 +248,24 @@ impl Default for Config {
 
 impl Config {
     pub fn load() -> Result<Self, config::ConfigError> {
-        // Check if config file exists
-        if std::path::Path::new("apm.yaml").exists() {
-            eprintln!("Found apm.yaml in current directory");
+        let config_paths = Self::get_config_paths();
+        
+        // Find the first existing config file
+        let config_file = config_paths.iter()
+            .find(|path| path.exists())
+            .cloned();
+            
+        if let Some(ref path) = config_file {
+            eprintln!("Using config file: {}", path.display());
         } else {
-            eprintln!("apm.yaml not found in current directory");
+            eprintln!("No config file found, using defaults");
+            eprintln!("Checked paths:");
+            for path in &config_paths {
+                eprintln!("  {}", path.display());
+            }
         }
         
-        let builder = config::Config::builder()
+        let mut builder = config::Config::builder()
             .set_default("server.host", "0.0.0.0")?
             .set_default("server.port", 7337)?
             .set_default("storage.database_url", "sqlite:apm.db")?
@@ -275,12 +286,17 @@ impl Config {
             .set_default("cleanup.auto_clean_on_startup", false)?
             .set_default("cleanup.retention_hours", 168)?
             .set_default("cleanup.keep_logs", false)?
-            .set_default("cleanup.keep_failed", true)?
-            .add_source(config::File::from(std::path::Path::new("apm.yaml")).required(false))
+            .set_default("cleanup.keep_failed", true)?;
+
+        // Add config file if found
+        if let Some(config_file) = config_file {
+            builder = builder.add_source(config::File::from(config_file).required(false));
+        }
+        
+        // Environment variables always take precedence
+        let config = builder
             .add_source(config::Environment::with_prefix("APM"))
             .build()?;
-
-        let config = builder;
         
         // Debug what we got
         if let Ok(mcp_enabled) = config.get_bool("mcp.enabled") {
@@ -288,6 +304,75 @@ impl Config {
         }
 
         config.try_deserialize()
+    }
+    
+    /// Get the list of config file paths in precedence order (highest to lowest)
+    pub fn get_config_paths() -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        
+        // User config directory (~/.config/apm/config.yaml)
+        if let Some(config_dir) = dirs::config_dir() {
+            paths.push(config_dir.join("apm").join("config.yaml"));
+        }
+        
+        // System config directory (/etc/apm/config.yaml)
+        paths.push(PathBuf::from("/etc/apm/config.yaml"));
+        
+        paths
+    }
+    
+    /// Get the primary user config file path
+    pub fn get_user_config_path() -> Option<PathBuf> {
+        dirs::config_dir().map(|dir| dir.join("apm").join("config.yaml"))
+    }
+    
+    /// Create the default config file content as YAML string
+    pub fn default_config_yaml() -> String {
+        r#"# APM Configuration File
+# This file configures the Agent Process Manager daemon
+
+# API server settings
+server:
+  host: "0.0.0.0"
+  port: 7337
+
+# Database and storage settings
+storage:
+  database_url: "sqlite:apm.db"
+  log_retention_days: 7
+  max_log_size_mb: 1000
+
+# UI settings
+ui:
+  theme: "dark"
+  dashboard_auth: "none"
+
+# MCP (Model Context Protocol) settings
+mcp:
+  enabled: false
+  transport: "tcp"
+  tcp_host: "127.0.0.1"
+  tcp_port: 7338
+  unix_socket: "/tmp/apm.sock"
+
+# Access control settings
+access_control:
+  mode: "open"  # open, strict, or unrestricted
+
+# Search indexing settings
+search:
+  enabled: true
+  index_path: "./apm_search_index"
+  commit_interval_seconds: 5
+  buffer_size_mb: 50
+
+# Automatic cleanup settings
+cleanup:
+  auto_clean_on_startup: false
+  retention_hours: 168  # 7 days
+  keep_logs: false
+  keep_failed: true
+"#.to_string()
     }
 
     pub fn load_from_path(path: &str) -> Result<Self, config::ConfigError> {

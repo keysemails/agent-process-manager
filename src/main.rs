@@ -158,6 +158,26 @@ enum Commands {
         #[arg(long, default_value = "7338")]
         port: u16,
     },
+    
+    /// Configuration management commands
+    Config {
+        #[command(subcommand)]
+        config_command: ConfigCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommands {
+    /// Initialize user config directory and create default config file
+    Init {
+        /// Force overwrite existing config
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Show which config file is being used
+    Path,
+    /// Edit config file in $EDITOR
+    Edit,
 }
 
 fn init_default_logging() {
@@ -230,6 +250,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::McpBridge { host, port } => {
             // Don't initialize logging for bridge mode - we need clean stdio
             run_mcp_bridge(host, port).await
+        }
+        Commands::Config { config_command } => {
+            init_default_logging();
+            handle_config_command(config_command).await
         }
     }
 }
@@ -1941,5 +1965,142 @@ async fn run_mcp_bridge(host: String, port: u16) -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+async fn handle_config_command(config_command: ConfigCommands) -> anyhow::Result<()> {
+    match config_command {
+        ConfigCommands::Init { force } => config_init_cli(force).await,
+        ConfigCommands::Path => config_path_cli().await,
+        ConfigCommands::Edit => config_edit_cli().await,
+    }
+}
+
+async fn config_init_cli(force: bool) -> anyhow::Result<()> {
+    use std::fs;
+    
+    let config_path = match Config::get_user_config_path() {
+        Some(path) => path,
+        None => {
+            eprintln!("❌ Could not determine user config directory");
+            return Ok(());
+        }
+    };
+    
+    // Create the directory if it doesn't exist
+    if let Some(parent) = config_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)?;
+            println!("📁 Created config directory: {}", parent.display());
+        }
+    }
+    
+    // Check if config file already exists
+    if config_path.exists() && !force {
+        eprintln!("❌ Config file already exists at: {}", config_path.display());
+        eprintln!("   Use --force to overwrite");
+        return Ok(());
+    }
+    
+    // Write the default config
+    fs::write(&config_path, Config::default_config_yaml())?;
+    
+    println!("✅ Created config file: {}", config_path.display());
+    println!("   Edit this file to customize APM settings");
+    
+    Ok(())
+}
+
+async fn config_path_cli() -> anyhow::Result<()> {
+    let config_paths = Config::get_config_paths();
+    
+    // Find which config file exists and is being used
+    let active_config = config_paths.iter()
+        .find(|path| path.exists());
+        
+    println!("📋 Config file search order:");
+    for (i, path) in config_paths.iter().enumerate() {
+        let status = if path.exists() {
+            if Some(path) == active_config {
+                "✅ ACTIVE"
+            } else {
+                "📄 exists"
+            }
+        } else {
+            "❌ not found"
+        };
+        println!("  {}. {} - {}", i + 1, path.display(), status);
+    }
+    
+    if let Some(active) = active_config {
+        println!("\n🎯 Currently using: {}", active.display());
+    } else {
+        println!("\n⚠️  No config file found, using defaults");
+        if let Some(user_path) = Config::get_user_config_path() {
+            println!("   Run 'apm config init' to create: {}", user_path.display());
+        }
+    }
+    
+    Ok(())
+}
+
+async fn config_edit_cli() -> anyhow::Result<()> {
+    use std::process::Command;
+    
+    let config_paths = Config::get_config_paths();
+    
+    // Find existing config file or use user config path
+    let config_file = config_paths.iter()
+        .find(|path| path.exists())
+        .cloned()
+        .or_else(|| Config::get_user_config_path());
+        
+    let config_file = match config_file {
+        Some(path) => path,
+        None => {
+            eprintln!("❌ Could not determine config file path");
+            return Ok(());
+        }
+    };
+    
+    // If file doesn't exist, offer to create it
+    if !config_file.exists() {
+        println!("📝 Config file doesn't exist: {}", config_file.display());
+        println!("   Run 'apm config init' first to create it");
+        return Ok(());
+    }
+    
+    // Get editor from environment or use default
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| {
+            if cfg!(target_os = "macos") {
+                "open".to_string()
+            } else if cfg!(target_os = "windows") {
+                "notepad".to_string()
+            } else {
+                "nano".to_string()
+            }
+        });
+    
+    println!("📝 Opening config file in {}: {}", editor, config_file.display());
+    
+    let mut cmd = Command::new(&editor);
+    cmd.arg(&config_file);
+    
+    match cmd.status() {
+        Ok(status) => {
+            if status.success() {
+                println!("✅ Config file editing completed");
+            } else {
+                eprintln!("❌ Editor exited with error");
+            }
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to open editor '{}': {}", editor, e);
+            eprintln!("   Try setting EDITOR environment variable");
+        }
+    }
+    
     Ok(())
 }
