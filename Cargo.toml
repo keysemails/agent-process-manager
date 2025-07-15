@@ -109,3 +109,54 @@ hyper = "1.6"
 [[bench]]
 name = "log_processing"
 harness = false
+
+# Unit tests
+[[test]]
+name = "log_patterns_test"
+path = "tests/unit/log_patterns_test.rs"
+
+[[test]]
+name = "log_storage_test"
+path = "tests/unit/log_storage_test.rs"
+
+[[test]]
+name = "log_summarizer_test"
+path = "tests/unit/log_summarizer_test.rs"
+
+# Integration tests
+[[test]]
+name = "agent_api_test"
+path = "tests/integration/rust/agent_api_test.rs"
+
+[[test]]
+name = "api_integration_test"
+path = "tests/integration/rust/api_integration_test.rs"
+
+[[test]]
+name = "mcp_simple_test"
+path = "tests/integration/rust/mcp_simple_test.rs"
+
+[[test]]
+name = "mcp_tcp_test"
+path = "tests/integration/rust/mcp_tcp_test.rs"
+
+[[test]]
+name = "mcp_test"
+path = "tests/integration/rust/mcp_test.rs"
+
+[[test]]
+name = "process_supervisor_test"
+path = "tests/integration/rust/process_supervisor_test.rs"
+
+[[test]]
+name = "search_test"
+path = "tests/integration/rust/search_test.rs"
+
+[[test]]
+name = "terminal_attachment_test"
+path = "tests/integration/rust/terminal_attachment_test.rs"
+
+# End-to-end tests
+[[test]]
+name = "cli_e2e_test"
+path = "tests/e2e/cli_e2e_test.rs"

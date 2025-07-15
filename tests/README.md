@@ -1,104 +1,148 @@
 # APM Test Suite
 
-Comprehensive test suite for the Agent Process Manager covering unit tests, integration tests, and end-to-end tests.
+This directory contains all tests for the Agent Process Manager, organized by type and technology.
 
-## Test Structure
+## 📁 Directory Structure
 
-### Unit Tests
-Located in individual test modules within the source files and in the `tests/` directory:
+### 🧪 [unit/](unit/)
+**Rust unit tests** - Fast tests that test individual components:
+- `log_patterns_test.rs` - Pattern detection and matching
+- `log_storage_test.rs` - SQLite storage operations
+- `log_summarizer_test.rs` - Log analysis and summarization
 
-- **Process Supervisor Tests** (`tests/process_supervisor_test.rs`)
-  - Process spawning with/without PTY
-  - Process lifecycle management (start, stop, restart)
-  - Restart policies and failure handling
-  - Environment variables and working directory
-  - Concurrent process operations
-  - Health metric collection
+### 🔧 [integration/](integration/)
+**Integration tests** - Test component interactions:
 
-- **Log Storage Tests** (`tests/log_storage_test.rs`)
-  - Log entry persistence and retrieval
-  - Query filtering (by level, time, patterns)
-  - Pagination support
-  - Log summarization
-  - Concurrent write operations
-  - ANSI escape code handling
+#### [rust/](integration/rust/) - Rust integration tests
+- `agent_api_test.rs` - AI Agent API testing
+- `api_integration_test.rs` - HTTP API testing
+- `mcp_*.rs` - MCP protocol testing
+- `process_supervisor_test.rs` - Process management
+- `search_test.rs` - Full-text search
+- `terminal_attachment_test.rs` - Terminal features
 
-- **Pattern Detection Tests** (`tests/log_patterns_test.rs`)
-  - Port number detection
-  - URL extraction
-  - Error keyword matching
-  - File path detection
-  - Property-based testing
-  - Performance validation
+#### [python/](integration/python/) - Python-based tests
+- `test_mcp_*.py` - MCP protocol testing
+- `test_auto_cleanup.py` - Cleanup functionality
+- `test_list_display.py` - CLI display testing
+- Uses pytest with fixtures in `conftest.py`
 
-### Integration Tests
-- **API Integration Tests** (`tests/api_integration_test.rs`)
-  - All REST endpoints
-  - Error handling
-  - Request/response validation
-  - Health checks
-  - Agent-specific endpoints
+#### [shell/](integration/shell/) - Shell script tests
+- `test_persistence.sh` - Data persistence
+- `test_hierarchical_access.sh` - Access control
+- `test_mcp*.sh` - MCP shell testing
 
-### End-to-End Tests
-- **CLI E2E Tests** (`tests/cli_e2e_test.rs`)
-  - Full command-line interface testing
-  - Daemon lifecycle
-  - Process management via CLI
-  - Log viewing
-  - Error scenarios
+### 🌍 [e2e/](e2e/)
+**End-to-end tests** - Full workflow testing:
+- `test_full_workflow.py` - Complete user workflows
+- `cli_e2e_test.rs` - CLI end-to-end testing
 
-## Running Tests
+### 📋 [fixtures/](fixtures/)
+**Test data and configuration**:
+- `configs/` - Test configuration files
+- `data/` - Test data and regression files
 
-### Run All Tests
+### 🔧 [scripts/](scripts/)
+**Test runner scripts**:
+- `run_all.sh` - Run complete test suite
+- `quick_test.sh` - Fast subset of tests
+- `test_apm.sh` - APM-specific tests
+
+## 🚀 Running Tests
+
+### All Tests
 ```bash
-./run_tests.sh
+# Run complete test suite
+./tests/scripts/run_all.sh
+
+# Quick test subset
+./tests/scripts/quick_test.sh
 ```
 
-### Run Specific Test Categories
+### By Category
 ```bash
 # Unit tests only
 cargo test --lib
 
-# Process supervisor tests
-cargo test --test process_supervisor_test
+# Integration tests
+cargo test --test "*"
 
-# Log storage tests
-cargo test --test log_storage_test
+# Python tests
+cd tests/integration/python
+python -m pytest
 
-# Pattern detection tests
-cargo test --test log_patterns_test
-
-# API integration tests
-cargo test --test api_integration_test
-
-# CLI end-to-end tests
-cargo test --test cli_e2e_test
+# Shell tests
+./tests/integration/shell/test_*.sh
 ```
 
-### Run with Logging
+### Specific Tests
 ```bash
-RUST_LOG=agent_process_manager=debug cargo test -- --nocapture
+# Specific Rust test
+cargo test --test agent_api_test
+
+# Specific Python test
+python -m pytest tests/integration/python/test_mcp_basic.py
+
+# MCP tests only
+cargo test mcp
+python -m pytest tests/integration/python/test_mcp_*.py
 ```
 
-### Run Benchmarks
-```bash
-cargo bench
-```
+## 🔧 Test Configuration
 
-## Test Dependencies
+### Prerequisites
+- Rust toolchain
+- Python 3.7+ with pytest
+- APM binary built (`cargo build`)
 
-The test suite uses several additional dependencies:
-- `tempfile` - Temporary file/directory creation
-- `mockall` - Mocking framework (ready for use)
-- `proptest` - Property-based testing
-- `criterion` - Benchmarking
-- `test-case` - Parameterized tests
-- `wiremock` - HTTP mocking
-- `serial_test` - Sequential test execution
+### Environment Variables
+- `RUST_LOG=debug` - Enable debug logging
+- `APM_TEST_TIMEOUT=30` - Test timeout in seconds
 
-## Writing New Tests
+### Test Data
+- Fixtures in `tests/fixtures/`
+- Temporary workspaces created per test
+- Automatic cleanup after tests
 
-### Test Utilities
+## 📚 Writing Tests
+
+### Rust Tests
+- Unit tests: Test individual functions/modules
+- Integration tests: Test component interactions
+- Use `#[tokio::test]` for async tests
+- See existing tests for patterns
+
+### Python Tests
+- Use pytest fixtures from `conftest.py`
+- Test MCP protocol and CLI interactions
+- Automatic APM daemon management
+- Temporary workspace per test
+
+### Shell Tests
+- Test CLI behavior and output
+- Use common test utilities
+- Proper cleanup and error handling
+
+## 🔍 Test Categories
+
+### By Speed
+- **Fast**: Unit tests (`cargo test --lib`)
+- **Medium**: Integration tests (`cargo test --test`)
+- **Slow**: E2E tests and Python tests
+
+### By Component
+- **Core**: Process management, logging
+- **API**: HTTP API, WebSocket, AI Agent API
+- **MCP**: Model Context Protocol
+- **CLI**: Command-line interface
+- **Search**: Full-text search functionality
+
+### By Platform
+- **Cross-platform**: Most tests
+- **Unix-only**: tmux integration tests
+
+## 🧪 Test Utilities
+
 Use the test utilities in `src/test_utils.rs`:
 ```rust
 use agent_process_manager::test_utils::test_utils::*;
@@ -113,7 +157,8 @@ let process = create_test_process_info("my-process");
 let logs = create_test_log_entries("process-id", 10);
 ```
 
-### Best Practices
+## ✅ Best Practices
+
 1. Use `#[serial]` for tests that interact with the daemon
 2. Clean up processes and resources after tests
 3. Use descriptive test names
@@ -121,15 +166,7 @@ let logs = create_test_log_entries("process-id", 10);
 5. Use property-based testing for complex inputs
 6. Keep tests isolated and independent
 
-## Continuous Integration
-
-The test suite is designed to run in CI environments:
-- Tests automatically kill any existing daemons
-- Serial execution prevents race conditions
-- Temporary directories isolate file operations
-- All tests clean up after themselves
-
-## Coverage
+## 📊 Coverage
 
 To generate test coverage reports:
 ```bash
@@ -137,7 +174,7 @@ cargo install cargo-tarpaulin
 cargo tarpaulin --out Html
 ```
 
-## Known Issues
+## ⚠️ Known Issues
 
 1. WebSocket tests require a running server (currently commented out)
 2. Some timing-sensitive tests may occasionally fail on slow systems

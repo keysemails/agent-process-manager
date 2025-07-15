@@ -21,7 +21,8 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(awk:*)",
       "Bash(cat:*)",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(mv:*)"
     ],
     "deny": []
   }

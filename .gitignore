@@ -13,14 +13,25 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
-# APM specific
-apm.db
-apm.db-shm
-apm.db-wal
-apm-daemon.log
-*.log
+# APM runtime files (now in config/ directory)
+config/
+apm_search_index/
 
-#
-   Test artifacts
-test-*.js
-debug-*.sh
+# Legacy runtime files (shouldn't exist in root anymore)
+apm.db*
+*.log
+apm.yaml
+
+# Temporary test artifacts
+test_output.log
+test_config
+test_subdir/
+apm  # symlink
+
+# Temporary Python files
+__pycache__/
+*.pyc
+*.pyo
+
+# Temporary examples
+examples/test_mcp_connection.*

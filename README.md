@@ -4,7 +4,7 @@ A standalone service for AI-native process management that reduces context usage
 
 ## 🤖 AI Assistant Integration
 
-**⚠️ IMPORTANT: If you're an AI assistant (Claude, ChatGPT, etc.), please read [APM_FOR_AI_ASSISTANTS.md](APM_FOR_AI_ASSISTANTS.md) for critical instructions on using APM to avoid getting blocked on long-running commands.**
+**⚠️ IMPORTANT: If you're an AI assistant (Claude, ChatGPT, etc.), please read [APM for AI Assistants](docs/setup/ai-assistants.md) for critical instructions on using APM to avoid getting blocked on long-running commands.**
 
 ### Quick Setup for Claude Code
 ```bash
@@ -17,7 +17,7 @@ claude mcp add agent-process-manager apm mcp-bridge -e RUST_LOG=warn
 - **Provides structured logs** that reduce token usage by ~90%
 - **Allows process management** (start, stop, restart, logs)
 
-See [APM_FOR_AI_ASSISTANTS.md](APM_FOR_AI_ASSISTANTS.md) for detailed instructions.
+See [APM for AI Assistants](docs/setup/ai-assistants.md) for detailed instructions.
 
 ## Features
 
@@ -83,7 +83,7 @@ Enable APM process management in Claude Code with one command:
 claude mcp add agent-process-manager apm mcp-bridge -e RUST_LOG=warn
 ```
 
-Claude Code agents will now have access to APM tools for intelligent process management. See [CLAUDE_CODE_INTEGRATION.md](CLAUDE_CODE_INTEGRATION.md) for details.
+Claude Code agents will now have access to APM tools for intelligent process management. See [Claude Code Integration](docs/setup/claude-code.md) for details.
 
 ## API Usage
 
@@ -278,7 +278,7 @@ We welcome contributions! Agent Process Manager uses GitHub Issues for project m
 ### Priority & Component System
 Issues are organized with priority levels (critical, high, medium, low) and component labels (api, cli, logs, process, tmux, websocket, ai-agent, config) for easy filtering and organization.
 
-For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
+For detailed guidelines, see [Contributing Guide](docs/development/contributing.md).
 
 ## Development
 
@@ -286,26 +286,47 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 # Run with debug logging
 RUST_LOG=agent_process_manager=debug cargo run -- start
 
-# Run tests
-cargo test
-
-# Run full test suite with all categories
+# Run all tests
 ./run_tests.sh
 
-# Run specific test suites
-cargo test --test process_supervisor_test -- --test-threads=1
-cargo test --test log_storage_test -- --test-threads=1
-cargo test --test log_patterns_test
-cargo test --test api_integration_test -- --test-threads=1
-cargo test --test agent_api_test                   # AI Agent API tests
-cargo test --test log_summarizer_test              # Log summarization tests
-cargo test --test cli_e2e_test -- --test-threads=1
+# Run specific test categories
+cargo test --lib                    # Unit tests
+cargo test --test "*"              # Integration tests
+cd tests/integration/python && python -m pytest  # Python tests
 
 # Format code
 cargo fmt
 
 # Check lints
 cargo clippy
+```
+
+## 📁 Project Structure
+
+```
+agent-process-manager/
+├── src/                     # Source code
+├── docs/                    # 📚 All documentation
+│   ├── setup/              # Setup guides (AI assistants, Claude Code)
+│   ├── integration/        # Integration guides (MCP, Vibe)
+│   ├── architecture/       # Technical architecture docs
+│   ├── development/        # Development and contributing
+│   └── guides/             # Step-by-step guides
+├── tests/                   # 🧪 Organized test suite
+│   ├── unit/               # Unit tests
+│   ├── integration/        # Integration tests (Rust, Python, Shell)
+│   ├── e2e/                # End-to-end tests
+│   ├── fixtures/           # Test data and configs
+│   └── scripts/            # Test runners
+├── examples/                # 📋 Example configs and demos
+│   ├── configs/            # Configuration examples
+│   ├── scripts/            # Usage examples
+│   └── demo/               # Demonstration scripts
+├── scripts/                 # 🔧 Development tools
+│   ├── github/             # GitHub automation
+│   └── mcp/                # MCP utilities
+├── benches/                # Performance benchmarks
+└── config/                 # Runtime files (gitignored)
 ```
 
 ## License
