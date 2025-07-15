@@ -1,13 +1,11 @@
 {
   "mcpServers": {
-    "apm": {
-      "command": "/usr/local/bin/apm",
-      "args": ["start", "--mcp"],
+    "agent-process-manager": {
+      "command": "apm",
+      "args": ["mcp-bridge"],
       "env": {
-        "APM_MCP_ENABLED": "1",
-        "RUST_LOG": "agent_process_manager=info"
-      },
-      "description": "Agent Process Manager - AI-native process management"
+        "RUST_LOG": "warn"
+      }
     }
   }
 }

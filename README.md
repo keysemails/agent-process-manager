@@ -2,6 +2,23 @@
 
 A standalone service for AI-native process management that reduces context usage by ~90% while maintaining full human access to logs.
 
+## 🤖 AI Assistant Integration
+
+**⚠️ IMPORTANT: If you're an AI assistant (Claude, ChatGPT, etc.), please read [APM_FOR_AI_ASSISTANTS.md](APM_FOR_AI_ASSISTANTS.md) for critical instructions on using APM to avoid getting blocked on long-running commands.**
+
+### Quick Setup for Claude Code
+```bash
+claude mcp add agent-process-manager apm mcp-bridge -e RUST_LOG=warn
+```
+
+### Why AI Assistants Need APM
+- **Prevents blocking** on commands like `npm run dev`, `python manage.py runserver`
+- **Enables background processes** without using problematic `&` or `nohup`
+- **Provides structured logs** that reduce token usage by ~90%
+- **Allows process management** (start, stop, restart, logs)
+
+See [APM_FOR_AI_ASSISTANTS.md](APM_FOR_AI_ASSISTANTS.md) for detailed instructions.
+
 ## Features
 
 - 🚀 **Process Management**: Spawn and control long-running processes with PTY support
@@ -57,6 +74,16 @@ apm clean --older-than 24          # Clean processes stopped >24 hours ago
 apm clean --current-dir            # Clean only from current directory
 apm clean --keep-logs              # Clean but preserve log data
 ```
+
+## Claude Code Integration
+
+Enable APM process management in Claude Code with one command:
+
+```bash
+claude mcp add agent-process-manager apm mcp-bridge -e RUST_LOG=warn
+```
+
+Claude Code agents will now have access to APM tools for intelligent process management. See [CLAUDE_CODE_INTEGRATION.md](CLAUDE_CODE_INTEGRATION.md) for details.
 
 ## API Usage
 

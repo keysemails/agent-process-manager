@@ -2,9 +2,113 @@
 
 use crate::ApmError;
 use std::process::Command;
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
-use tracing::{info, error};
+use tracing::{info, error, debug};
 use once_cell::sync::Lazy;
+
+/// Properly quote a string for shell execution with tmux-safe escaping
+fn shell_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    
+    // Characters that are safe to leave unquoted in shell and tmux contexts
+    let safe_chars = |c: char| {
+        c.is_ascii_alphanumeric() || 
+        "-_./=+@:".contains(c) ||
+        // Allow some common safe patterns
+        (c == '=' && !s.contains(' '))
+    };
+    
+    // If the string contains only safe characters, don't quote it
+    if s.chars().all(safe_chars) {
+        return s.to_string();
+    }
+    
+    // For complex strings, use single quotes with proper escaping
+    // This method is POSIX-compliant and tmux-safe
+    let escaped = s.replace("'", "'\"'\"'");
+    format!("'{}'", escaped)
+}
+
+/// Check if a command is complex and needs special handling
+fn is_complex_command(command: &str, args: &[String]) -> bool {
+    // Criteria for complexity that may cause shell parsing issues
+    let has_complex_chars = |s: &str| {
+        s.contains(';') || s.contains('|') || s.contains('&') ||
+        s.contains('(') || s.contains(')') || s.contains('{') || s.contains('}') ||
+        s.contains('\n') || s.contains('\r') || s.contains('`') ||
+        s.contains('$') || s.contains('*') || s.contains('?') ||
+        (s.contains('"') && s.contains('\'')) // Mixed quotes
+    };
+    
+    // Check if command or any argument is complex
+    has_complex_chars(command) || args.iter().any(|arg| has_complex_chars(arg)) ||
+    // Multiple arguments with quotes
+    (args.len() > 1 && args.iter().any(|arg| arg.contains('\'') || arg.contains('"')))
+}
+
+/// Generate a temporary script file for complex commands
+fn create_temp_script(
+    session_id: &str,
+    command: &str,
+    args: &[String],
+    env: &[(String, String)],
+) -> Result<PathBuf, ApmError> {
+    let script_path = format!("/tmp/apm-script-{}.sh", session_id);
+    let mut script_content = String::new();
+    
+    // Add shebang
+    script_content.push_str("#!/bin/bash\n");
+    script_content.push_str("set -e\n\n"); // Exit on error
+    
+    // Add environment variables
+    for (key, value) in env {
+        script_content.push_str(&format!("export {}={}\n", key, shell_quote(value)));
+    }
+    
+    if !env.is_empty() {
+        script_content.push('\n');
+    }
+    
+    // Add the main command using exec array approach
+    script_content.push_str("exec");
+    script_content.push(' ');
+    script_content.push_str(&shell_quote(command));
+    
+    for arg in args {
+        script_content.push(' ');
+        script_content.push_str(&shell_quote(arg));
+    }
+    
+    script_content.push('\n');
+    
+    debug!("Generated temp script content:\n{}", script_content);
+    
+    // Write script to file
+    let mut file = fs::File::create(&script_path)
+        .map_err(|e| ApmError::ProcessError(format!("Failed to create temp script: {}", e)))?;
+    
+    file.write_all(script_content.as_bytes())
+        .map_err(|e| ApmError::ProcessError(format!("Failed to write temp script: {}", e)))?;
+    
+    // Make script executable
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = file.metadata()
+            .map_err(|e| ApmError::ProcessError(format!("Failed to get script metadata: {}", e)))?
+            .permissions();
+        perms.set_mode(0o755); // rwxr-xr-x
+        fs::set_permissions(&script_path, perms)
+            .map_err(|e| ApmError::ProcessError(format!("Failed to make script executable: {}", e)))?;
+    }
+    
+    Ok(PathBuf::from(script_path))
+}
 
 // Find the actual tmux executable path at startup
 static TMUX_PATH: Lazy<String> = Lazy::new(|| {
@@ -60,11 +164,35 @@ impl TmuxManager {
         env: &[(String, String)],
         log_path: Option<&str>,
     ) -> Result<(), ApmError> {
-        // Build the full command to run in the session
-        let full_command = if args.is_empty() {
-            format!("{} ; echo 'Process exited with code '$? ; read -p 'Press enter to close session'", command)
+        // Check if command is complex and needs temp script approach
+        let use_temp_script = is_complex_command(command, args);
+        debug!("Command complexity check: command='{}', args={:?}, complex={}", command, args, use_temp_script);
+        
+        // Temporarily force temp script for Python commands to test
+        let use_temp_script = use_temp_script || (command == "python3" && !args.is_empty());
+        
+        // VERY OBVIOUS DEBUG MESSAGE
+        info!("🔧 TMUX SESSION CREATION - Command: '{}', Args: {:?}, UseScript: {}", command, args, use_temp_script);
+        
+        let full_command = if use_temp_script {
+            info!("Using temp script approach for complex command: {} {:?}", command, args);
+            
+            // Create temporary script file
+            let script_path = create_temp_script(session_name, command, args, env)?;
+            
+            // Return script execution command with cleanup
+            format!("{} ; echo 'Process exited with code '$? ; rm -f {} ; read -p 'Press enter to close session'", 
+                shell_quote(&script_path.to_string_lossy()), 
+                shell_quote(&script_path.to_string_lossy()))
         } else {
-            format!("{} {} ; echo 'Process exited with code '$? ; read -p 'Press enter to close session'", command, args.join(" "))
+            // Use traditional approach for simple commands
+            if args.is_empty() {
+                format!("{} ; echo 'Process exited with code '$? ; read -p 'Press enter to close session'", shell_quote(command))
+            } else {
+                let quoted_args: Vec<String> = args.iter().map(|arg| shell_quote(arg)).collect();
+                format!("{} {} ; echo 'Process exited with code '$? ; read -p 'Press enter to close session'", 
+                    shell_quote(command), quoted_args.join(" "))
+            }
         };
         
         info!("Creating tmux session '{}' with command: {}", session_name, full_command);
@@ -89,15 +217,17 @@ impl TmuxManager {
             tmux_cmd.push_str(&format!(" \\; pipe-pane -o 'cat >> {}'", log_path));
         }
         
-        // Send environment variables first if any
-        for (key, value) in env {
-            tmux_cmd.push_str(&format!(" \\; send-keys 'export {}=\"{}\"' Enter", 
-                key, value.replace("'", "'\"'\"'")));
+        // Send environment variables first if any (but skip if using temp script)
+        if !use_temp_script {
+            for (key, value) in env {
+                let export_cmd = format!("export {}={}", key, shell_quote(value));
+                tmux_cmd.push_str(&format!(" \\; send-keys {} Enter", shell_quote(&export_cmd)));
+            }
         }
         
         // Send the actual command to run
-        tmux_cmd.push_str(&format!(" \\; send-keys '{}' Enter", 
-            full_command.replace("'", "'\"'\"'")));
+        tmux_cmd.push_str(&format!(" \\; send-keys {} Enter", 
+            shell_quote(&full_command)));
         
         cmd.arg(&tmux_cmd);
         

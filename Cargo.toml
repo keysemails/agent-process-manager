@@ -36,6 +36,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
+dialoguer = { version = "0.11", features = ["completion"] }
 
 # Process and PTY management
 portable-pty = "0.8"

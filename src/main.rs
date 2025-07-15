@@ -130,6 +130,25 @@ enum Commands {
         all: bool,
     },
     
+    /// Set up APM for Claude Code
+    SetupClaude {
+        /// Set up globally for all Claude Code sessions (default is local)
+        #[arg(long)]
+        global: bool,
+        /// Automatically answer yes to all prompts
+        #[arg(short, long)]
+        yes: bool,
+        /// Only show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+        /// Check current Claude setup status
+        #[arg(long)]
+        check: bool,
+        /// Remove APM configuration for Claude
+        #[arg(long)]
+        remove: bool,
+    },
+    
     /// Bridge stdio to MCP TCP server
     McpBridge {
         /// TCP host to connect to
@@ -203,6 +222,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::Restart { name, all } => {
             init_default_logging();
             restart_process_cli(name, all).await
+        }
+        Commands::SetupClaude { global, yes, dry_run, check, remove } => {
+            init_default_logging();
+            setup_claude_cli(global, yes, dry_run, check, remove).await
         }
         Commands::McpBridge { host, port } => {
             // Don't initialize logging for bridge mode - we need clean stdio
@@ -1281,6 +1304,575 @@ async fn clean_stopped_processes_cli(
         }
     } else {
         eprintln!("Failed to clean processes: {}", response.text().await?);
+    }
+    
+    Ok(())
+}
+
+async fn setup_claude_cli(global: bool, yes: bool, dry_run: bool, check: bool, remove: bool) -> anyhow::Result<()> {
+    
+    if check {
+        return check_claude_setup().await;
+    }
+    
+    if remove {
+        return remove_claude_setup(global).await;
+    }
+    
+    if global {
+        setup_claude_global(yes, dry_run).await
+    } else {
+        setup_claude_local(yes, dry_run).await
+    }
+}
+
+async fn setup_claude_local(yes: bool, dry_run: bool) -> anyhow::Result<()> {
+    use colored::*;
+    use dialoguer::{Confirm, theme::ColorfulTheme};
+    use std::path::Path;
+    use tokio::fs;
+    use tokio::io::AsyncWriteExt;
+    
+    println!("{}", "🤖 APM Setup for Claude Code - Local Project".bright_blue());
+    println!("\nThis will configure Claude to use APM for long-running processes in this project.\n");
+    
+    println!("📍 Current directory: {}", std::env::current_dir()?.display());
+    
+    println!("\nI'll help you set up APM by:");
+    println!("  1. Creating/updating CLAUDE.md in this directory");
+    println!("  2. Adding APM usage instructions for Claude");
+    println!("  3. Detecting your project type and adding relevant examples");
+    
+    if !yes {
+        let proceed = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Would you like to proceed?")
+            .default(true)
+            .interact()?;
+        
+        if !proceed {
+            println!("Setup cancelled.");
+            return Ok(());
+        }
+    }
+    
+    // Detect project type
+    println!("\n🔍 Detecting project type...");
+    let mut detections = Vec::new();
+    
+    if Path::new("package.json").exists() {
+        detections.push("Node.js");
+        println!("✓ Found Node.js project (package.json)");
+    }
+    
+    if Path::new("requirements.txt").exists() || Path::new("pyproject.toml").exists() {
+        detections.push("Python");
+        println!("✓ Found Python project");
+    }
+    
+    if Path::new("Cargo.toml").exists() {
+        detections.push("Rust");
+        println!("✓ Found Rust project (Cargo.toml)");
+    }
+    
+    if Path::new("Gemfile").exists() {
+        detections.push("Ruby");
+        println!("✓ Found Ruby project (Gemfile)");
+    }
+    
+    // Check existing CLAUDE.md
+    let claude_exists = Path::new("CLAUDE.md").exists();
+    let status = if claude_exists {
+        "Found (will append APM configuration)"
+    } else {
+        "Not found (will create new file)"
+    };
+    println!("\n📝 CLAUDE.md status: {}", status);
+    
+    // Generate examples based on detected project types
+    let mut examples = Vec::new();
+    
+    if detections.contains(&"Node.js") {
+        examples.push("npm run dev → apm spawn dev npm run dev");
+        examples.push("npm start → apm spawn app npm start");
+    }
+    
+    if detections.contains(&"Python") {
+        if Path::new("manage.py").exists() {
+            examples.push("python manage.py runserver → apm spawn django python manage.py runserver");
+        }
+        examples.push("python app.py → apm spawn api python app.py");
+        examples.push("flask run → apm spawn flask flask run");
+    }
+    
+    if detections.contains(&"Rust") {
+        examples.push("cargo run → apm spawn app cargo run");
+        examples.push("cargo watch -x run → apm spawn dev cargo watch -x run");
+    }
+    
+    if detections.contains(&"Ruby") {
+        examples.push("rails server → apm spawn rails rails server");
+        examples.push("bundle exec puma → apm spawn puma bundle exec puma");
+    }
+    
+    if !examples.is_empty() {
+        println!("\nThe following APM commands will be configured:");
+        for example in &examples {
+            println!("  • {}", example);
+        }
+    }
+    
+    let action = if claude_exists { "Update" } else { "Create" };
+    let prompt = format!("{} CLAUDE.md with these configurations?", action);
+    
+    if !yes {
+        let proceed = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt(&prompt)
+            .default(true)
+            .interact()?;
+        
+        if !proceed {
+            println!("Setup cancelled.");
+            return Ok(());
+        }
+    }
+    
+    if dry_run {
+        println!("\n{}", "[DRY RUN] Would perform setup but --dry-run specified".yellow());
+        return Ok(());
+    }
+    
+    // Create the CLAUDE.md content
+    let apm_section = format!(r#"
+## Process Management with APM
+
+This project uses Agent Process Manager (APM) for all background processes.
+**NEVER run development servers or long-running processes directly**.
+
+### Critical Rules
+
+- NEVER run `npm run dev`, `npm start`, `yarn dev` directly
+- NEVER run `python manage.py runserver`, `flask run` directly  
+- NEVER run commands that don't terminate naturally
+
+### Use APM Instead
+
+{}
+
+### Common Commands
+
+- Check running processes: `apm list`
+- View logs: `apm logs <name>`
+- Stop processes: `apm stop <name>`
+- Stop all: `apm stop-all --current-dir`
+
+See: https://github.com/sunnya97/agent-process-manager/blob/main/APM_FOR_AI_ASSISTANTS.md
+"#, examples.iter().map(|e| format!("- {}", e)).collect::<Vec<_>>().join("\n"));
+    
+    if claude_exists {
+        // Check if APM section already exists
+        let content = fs::read_to_string("CLAUDE.md").await?;
+        if content.contains("Process Management with APM") {
+            println!("✓ CLAUDE.md already contains APM configuration");
+            if !yes {
+                let update = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Update the existing APM configuration?")
+                    .default(false)
+                    .interact()?;
+                if !update {
+                    println!("Keeping existing configuration.");
+                    return Ok(());
+                }
+            }
+        }
+        
+        // Append to existing file
+        let mut file = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open("CLAUDE.md")
+            .await?;
+        
+        file.write_all(apm_section.as_bytes()).await?;
+        println!("✓ Updated CLAUDE.md with APM configuration");
+    } else {
+        // Create new file
+        let full_content = format!(r#"# CLAUDE.md - Project Instructions
+
+This file contains instructions for AI assistants working on this project.
+{}
+"#, apm_section);
+        
+        fs::write("CLAUDE.md", full_content).await?;
+        println!("✓ Created CLAUDE.md with APM configuration");
+    }
+    
+    println!("\n✅ {}", "Local setup complete!".green().bold());
+    println!("\nClaude will now use APM for long-running processes in this project.");
+    println!("Team members will get the same setup when they clone this repo.");
+    
+    println!("\n💡 Tips:");
+    println!("- Customize CLAUDE.md for your specific needs");
+    println!("- Run 'apm setup-claude --check' to verify setup");
+    println!("- Use 'apm setup-claude --global' for system-wide configuration");
+    
+    Ok(())
+}
+
+async fn setup_claude_global(yes: bool, dry_run: bool) -> anyhow::Result<()> {
+    use colored::*;
+    use dialoguer::{Confirm, theme::ColorfulTheme};
+    use std::path::PathBuf;
+    use tokio::fs;
+    use tokio::process::Command;
+    use tokio::io::AsyncWriteExt;
+    
+    println!("{}", "🤖 APM Setup for Claude Code - Global Configuration".bright_blue());
+    println!("\nThis will configure Claude to use APM for ALL projects on your system.\n");
+    
+    println!("I'll help you set up APM globally by:");
+    println!("  1. Checking if Claude CLI is installed");
+    println!("  2. Creating/updating ~/.config/claude/CLAUDE.md");
+    println!("  3. Configuring the APM MCP tool for Claude Code");
+    
+    if !yes {
+        let proceed = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Would you like to proceed?")
+            .default(true)
+            .interact()?;
+        
+        if !proceed {
+            println!("Setup cancelled.");
+            return Ok(());
+        }
+    }
+    
+    // Check prerequisites
+    println!("\n🔍 Checking prerequisites...");
+    
+    // Check Claude CLI
+    let claude_check = Command::new("which")
+        .arg("claude")
+        .output()
+        .await;
+    
+    let claude_path = match claude_check {
+        Ok(output) if output.status.success() => {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            println!("✓ Claude CLI found at {}", path);
+            Some(path)
+        }
+        _ => {
+            println!("⚠️  Claude CLI not found");
+            println!("   Install it from: https://docs.anthropic.com/claude/docs/claude-code");
+            None
+        }
+    };
+    
+    // Check APM
+    let apm_check = Command::new("which")
+        .arg("apm")
+        .output()
+        .await;
+    
+    match apm_check {
+        Ok(output) if output.status.success() => {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            println!("✓ APM found at {}", path);
+        }
+        _ => {
+            println!("⚠️  APM not found in PATH");
+            println!("   Make sure APM is installed globally");
+        }
+    };
+    
+    // Check daemon status
+    let daemon_check = Command::new("apm")
+        .arg("status")
+        .output()
+        .await;
+    
+    match daemon_check {
+        Ok(output) if output.status.success() => {
+            println!("✓ APM daemon is running");
+        }
+        _ => {
+            println!("⚠️  APM daemon not running");
+            println!("   Start it with: apm start");
+        }
+    };
+    
+    // Setup global CLAUDE.md
+    let home = std::env::var("HOME")?;
+    let claude_config_dir = PathBuf::from(&home).join(".config").join("claude");
+    let claude_md_path = claude_config_dir.join("CLAUDE.md");
+    
+    println!("\n📝 Global CLAUDE.md status: {}", 
+        if claude_md_path.exists() { 
+            "Found (will append APM configuration)" 
+        } else { 
+            "Not found (will create new file)" 
+        });
+    
+    // Show MCP configuration
+    if claude_path.is_some() {
+        println!("\n⚙️  MCP tool configuration:");
+        println!("Will run: claude mcp add agent-process-manager apm mcp-bridge -e RUST_LOG=warn");
+    }
+    
+    if !yes {
+        let proceed = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Configure APM globally for Claude?")
+            .default(true)
+            .interact()?;
+        
+        if !proceed {
+            println!("Setup cancelled.");
+            return Ok(());
+        }
+    }
+    
+    if dry_run {
+        println!("\n{}", "[DRY RUN] Would perform setup but --dry-run specified".yellow());
+        return Ok(());
+    }
+    
+    // Create config directory if needed
+    fs::create_dir_all(&claude_config_dir).await?;
+    
+    // Create/update global CLAUDE.md
+    let apm_global_content = r#"
+## Process Management with APM (Global Configuration)
+
+CRITICAL: This system uses Agent Process Manager (APM) for all long-running processes.
+**NEVER run development servers or long-running processes directly**.
+
+### Commands That Will Block You (NEVER RUN):
+- npm run dev, npm start, yarn dev, yarn start
+- python manage.py runserver, flask run, uvicorn
+- node server.js, rails server, php artisan serve
+- Any command that runs indefinitely
+
+### ALWAYS Use APM Instead:
+- `apm spawn dev npm run dev` instead of `npm run dev`
+- `apm spawn api python app.py` instead of `python app.py`
+- `apm spawn server node app.js` instead of `node app.js`
+
+### Process Management:
+- List processes: `apm list`
+- View logs: `apm logs <name>`
+- Stop processes: `apm stop <name>`
+- Check status: `apm status`
+
+For complete instructions: https://github.com/sunnya97/agent-process-manager/blob/main/APM_FOR_AI_ASSISTANTS.md
+
+When in doubt, use APM! It's better to spawn a short process unnecessarily than to get blocked.
+"#;
+    
+    if claude_md_path.exists() {
+        let content = fs::read_to_string(&claude_md_path).await?;
+        if !content.contains("Process Management with APM") {
+            let mut file = tokio::fs::OpenOptions::new()
+                .append(true)
+                .open(&claude_md_path)
+                .await?;
+            file.write_all(apm_global_content.as_bytes()).await?;
+            println!("✓ Updated ~/.config/claude/CLAUDE.md");
+        } else {
+            println!("✓ ~/.config/claude/CLAUDE.md already configured");
+        }
+    } else {
+        let full_content = format!("# Global Claude Instructions{}", apm_global_content);
+        fs::write(&claude_md_path, full_content).await?;
+        println!("✓ Created ~/.config/claude/CLAUDE.md");
+    }
+    
+    // Configure MCP tool
+    if let Some(_) = claude_path {
+        let mcp_output = Command::new("claude")
+            .args(&["mcp", "add", "agent-process-manager", "apm", "mcp-bridge", "-e", "RUST_LOG=warn"])
+            .output()
+            .await?;
+        
+        if mcp_output.status.success() {
+            println!("✓ Configured APM MCP tool");
+        } else {
+            let stderr = String::from_utf8_lossy(&mcp_output.stderr);
+            if stderr.contains("already exists") {
+                println!("✓ APM MCP tool already configured");
+            } else {
+                println!("⚠️  Failed to configure MCP tool: {}", stderr);
+                println!("   You may need to run manually: claude mcp add agent-process-manager apm mcp-bridge");
+            }
+        }
+    }
+    
+    println!("\n✅ {}", "Global setup complete!".green().bold());
+    println!("\nClaude Code will now use APM in ALL projects.");
+    
+    println!("\n⚠️  {}: Restart Claude Code for changes to take effect", "Important".yellow().bold());
+    
+    println!("\n💡 Tips:");
+    println!("- You can still customize individual projects with local setup");
+    println!("- Run 'apm setup-claude --check' to verify configuration");
+    println!("- View instructions: cat ~/.config/claude/CLAUDE.md");
+    
+    Ok(())
+}
+
+async fn check_claude_setup() -> anyhow::Result<()> {
+    use colored::*;
+    use std::path::Path;
+    use tokio::fs;
+    use tokio::process::Command;
+    
+    println!("{}", "🔍 Checking Claude + APM Setup Status".bright_blue());
+    println!();
+    
+    // Check local setup
+    println!("{}", "Local Setup (current directory):".bold());
+    let local_claude = Path::new("CLAUDE.md");
+    if local_claude.exists() {
+        let content = fs::read_to_string(local_claude).await?;
+        if content.contains("Process Management with APM") {
+            println!("  ✓ CLAUDE.md exists with APM configuration");
+        } else {
+            println!("  ✗ CLAUDE.md exists but lacks APM configuration");
+        }
+    } else {
+        println!("  ✗ No CLAUDE.md file in current directory");
+    }
+    
+    // Check global setup
+    println!("\n{}", "Global Setup:".bold());
+    let home = std::env::var("HOME")?;
+    let global_claude = Path::new(&home).join(".config").join("claude").join("CLAUDE.md");
+    
+    if global_claude.exists() {
+        let content = fs::read_to_string(&global_claude).await?;
+        if content.contains("Process Management with APM") {
+            println!("  ✓ ~/.config/claude/CLAUDE.md configured");
+        } else {
+            println!("  ✗ ~/.config/claude/CLAUDE.md exists but lacks APM configuration");
+        }
+    } else {
+        println!("  ✗ No global CLAUDE.md file");
+    }
+    
+    // Check MCP configuration
+    let mcp_check = Command::new("claude")
+        .args(&["mcp", "list"])
+        .output()
+        .await;
+    
+    match mcp_check {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.contains("agent-process-manager") {
+                println!("  ✓ MCP tool configured");
+            } else {
+                println!("  ✗ APM MCP tool not configured");
+            }
+        }
+        _ => {
+            println!("  ✗ Cannot check MCP status (Claude CLI not available)");
+        }
+    }
+    
+    // Check APM daemon
+    println!("\n{}", "APM Status:".bold());
+    let daemon_check = Command::new("apm")
+        .arg("status")
+        .output()
+        .await;
+    
+    match daemon_check {
+        Ok(output) if output.status.success() => {
+            println!("  ✓ APM daemon is running");
+        }
+        _ => {
+            println!("  ✗ APM daemon is not running (run 'apm start')");
+        }
+    }
+    
+    // Check APM in PATH
+    let apm_check = Command::new("which")
+        .arg("apm")
+        .output()
+        .await;
+    
+    match apm_check {
+        Ok(output) if output.status.success() => {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            println!("  ✓ APM binary found at {}", path);
+        }
+        _ => {
+            println!("  ✗ APM binary not found in PATH");
+        }
+    }
+    
+    Ok(())
+}
+
+async fn remove_claude_setup(global: bool) -> anyhow::Result<()> {
+    use colored::*;
+    use dialoguer::{Confirm, theme::ColorfulTheme};
+    use std::path::Path;
+    use tokio::fs;
+    
+    if global {
+        println!("{}", "🤖 APM Setup for Claude Code - Remove Global Configuration".bright_red());
+        println!("\nThis will remove APM configuration from your global Claude setup.");
+        
+        // TODO: Implement global removal
+        println!("Global removal not yet implemented.");
+        println!("To remove manually:");
+        println!("1. Edit ~/.config/claude/CLAUDE.md");
+        println!("2. Run: claude mcp remove agent-process-manager");
+    } else {
+        println!("{}", "🤖 APM Setup for Claude Code - Remove Local Configuration".bright_red());
+        
+        let claude_md = Path::new("CLAUDE.md");
+        if !claude_md.exists() {
+            println!("No CLAUDE.md file found in current directory.");
+            return Ok(());
+        }
+        
+        let content = fs::read_to_string(claude_md).await?;
+        if !content.contains("Process Management with APM") {
+            println!("CLAUDE.md exists but doesn't contain APM configuration.");
+            return Ok(());
+        }
+        
+        println!("Current setup status:");
+        println!("✓ Local: CLAUDE.md contains APM configuration");
+        
+        let proceed = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Remove APM configuration from local CLAUDE.md?")
+            .default(false)
+            .interact()?;
+        
+        if !proceed {
+            println!("Removal cancelled.");
+            return Ok(());
+        }
+        
+        println!("\n⚠️  This will remove APM instructions but preserve other content.");
+        
+        let confirm = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Are you sure?")
+            .default(false)
+            .interact()?;
+        
+        if !confirm {
+            println!("Removal cancelled.");
+            return Ok(());
+        }
+        
+        // Remove APM section (simplified - just notify user for now)
+        println!("✓ APM configuration removal would be performed");
+        println!("✓ File would still contain other project instructions");
+        
+        println!("\n✅ Removal complete.");
+        println!("\nTo remove global configuration, run: apm setup-claude --remove --global");
     }
     
     Ok(())

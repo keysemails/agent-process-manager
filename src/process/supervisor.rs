@@ -209,6 +209,7 @@ impl ProcessManager {
     }
 
     async fn spawn_with_tmux(&self, id: ProcessId, config: ProcessConfig) -> Result<Process> {
+        info!("🔧 SUPERVISOR: spawn_with_tmux called - command='{}', args={:?}", config.command, config.args);
         let session_name = format!("apm-{}", id.0);
         
         // Prepare environment variables
