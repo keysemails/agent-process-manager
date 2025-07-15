@@ -2018,7 +2018,8 @@ async fn config_path_cli() -> anyhow::Result<()> {
     let active_config = config_paths.iter()
         .find(|path| path.exists());
         
-    println!("📋 Config file search order:");
+    println!("📋 Configuration Paths:");
+    println!("\n📁 Config file search order:");
     for (i, path) in config_paths.iter().enumerate() {
         let status = if path.exists() {
             if Some(path) == active_config {
@@ -2033,11 +2034,41 @@ async fn config_path_cli() -> anyhow::Result<()> {
     }
     
     if let Some(active) = active_config {
-        println!("\n🎯 Currently using: {}", active.display());
+        println!("\n🎯 Currently using config: {}", active.display());
     } else {
         println!("\n⚠️  No config file found, using defaults");
         if let Some(user_path) = Config::get_user_config_path() {
             println!("   Run 'apm config init' to create: {}", user_path.display());
+        }
+    }
+    
+    // Show data directory information
+    println!("\n💾 Data directory:");
+    match Config::get_data_dir() {
+        Some(data_dir) => {
+            let exists = data_dir.exists();
+            let status = if exists { "✅ exists" } else { "❌ not found" };
+            println!("   {} - {}", data_dir.display(), status);
+            if exists {
+                // Show what's in the data directory
+                if let Ok(entries) = std::fs::read_dir(&data_dir) {
+                    let mut files: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+                    files.sort_by_key(|e| e.file_name());
+                    if !files.is_empty() {
+                        println!("   Contents:");
+                        for entry in files {
+                            let name = entry.file_name();
+                            let file_type = if entry.path().is_dir() { "📁" } else { "📄" };
+                            println!("     {} {}", file_type, name.to_string_lossy());
+                        }
+                    }
+                }
+            } else {
+                println!("   Data directory will be created when APM starts");
+            }
+        }
+        None => {
+            println!("   ❌ Could not determine data directory");
         }
     }
     

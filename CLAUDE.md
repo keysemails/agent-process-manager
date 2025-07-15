@@ -89,7 +89,7 @@ GET    /health                     # Health check
 ```
 
 ### MCP Server (Port 7338 or Unix Socket)
-When `mcp.enabled=true`, the daemon also runs an MCP server that AI assistants can connect to:
+APM runs an MCP server by default that AI assistants can connect to:
 - **TCP Mode**: Listens on `tcp://127.0.0.1:7338` by default
 - **Unix Socket Mode**: Listens on `/tmp/apm.sock` by default
 - **Tools Available**: spawn, list, logs, stop, query
@@ -124,7 +124,7 @@ apm clean --keep-logs             # Clean but preserve log data
 # Configuration Management
 apm config init                   # Create user config file with defaults
 apm config init --force           # Overwrite existing config file
-apm config path                   # Show which config file is active
+apm config path                   # Show config and data directory paths
 apm config edit                   # Edit config file in $EDITOR
 
 # Interactive
@@ -252,11 +252,26 @@ nc localhost 7338
 
 ## Configuration Management
 
-APM uses a global configuration system following platform-specific conventions for config directories. Configuration files are searched in order of precedence:
+APM uses a global configuration system following platform-specific conventions for config and data directories. 
 
-1. **User config**: `~/.config/apm/config.yaml` (Linux/Unix) or `~/Library/Application Support/apm/config.yaml` (macOS)
-2. **System config**: `/etc/apm/config.yaml` 
-3. **Environment variables**: `APM_*` prefixed variables (highest precedence)
+### Directory Structure
+
+**Configuration Files:**
+- **User config**: `~/.config/apm/config.yaml` (Linux/Unix) or `~/Library/Application Support/apm/config.yaml` (macOS)
+- **System config**: `/etc/apm/config.yaml`
+
+**Data Files:**
+- **User data**: `~/.local/share/apm/` (Linux/Unix) or `~/Library/Application Support/apm/data/` (macOS)
+  - `apm.db`, `apm.db-shm`, `apm.db-wal` - SQLite database files
+  - `search_index/` - Full-text search index directory
+  - `logs/` - Additional log storage (if configured)
+
+### Configuration Precedence
+
+Configuration is loaded in order of precedence:
+1. **Environment variables**: `APM_*` prefixed variables (highest precedence)
+2. **User config**: Platform-specific user config file
+3. **System config**: `/etc/apm/config.yaml` (lowest precedence)
 
 ### Configuration Commands
 
@@ -285,7 +300,8 @@ server:
   port: 7337
 
 storage:
-  database_url: "sqlite:apm.db"
+  database_url: "sqlite:~/.local/share/apm/apm.db"  # Linux
+  # database_url: "sqlite:~/Library/Application Support/apm/data/apm.db"  # macOS
   log_retention_days: 7
   max_log_size_mb: 1000
 
@@ -294,7 +310,7 @@ ui:
   dashboard_auth: "none"
 
 mcp:
-  enabled: false
+  enabled: true
   transport: "tcp"
   tcp_host: "127.0.0.1"
   tcp_port: 7338
@@ -305,7 +321,8 @@ access_control:
 
 search:
   enabled: true
-  index_path: "./apm_search_index"
+  index_path: "~/.local/share/apm/search_index"  # Linux
+  # index_path: "~/Library/Application Support/apm/data/search_index"  # macOS  
   commit_interval_seconds: 5
   buffer_size_mb: 50
 

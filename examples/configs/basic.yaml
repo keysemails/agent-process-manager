@@ -5,7 +5,10 @@ server:
   port: 7337
 
 storage:
-  database_url: "sqlite:apm.db"
+  # Database paths use platform-specific data directories by default
+  # Linux: ~/.local/share/apm/apm.db
+  # macOS: ~/Library/Application Support/apm/data/apm.db
+  database_url: "sqlite:apm.db"  # Override with custom path if needed
   log_retention_days: 7
   max_log_size_mb: 1000
 
@@ -41,7 +44,7 @@ attach:
 
 # MCP (Model Context Protocol) server settings
 mcp:
-  enabled: false         # Enable MCP server alongside HTTP API
+  enabled: true          # MCP server enabled by default for AI integration
   transport: "tcp"       # "tcp" or "unix_socket"
   tcp_host: "127.0.0.1"  # TCP bind address
   tcp_port: 7338         # TCP port (pairs with HTTP 7337)
@@ -57,7 +60,10 @@ access_control:
 # Search engine configuration
 search:
   enabled: true
-  index_path: "./apm_search_index"
+  # Search index uses platform-specific data directories by default
+  # Linux: ~/.local/share/apm/search_index
+  # macOS: ~/Library/Application Support/apm/data/search_index
+  index_path: "./apm_search_index"  # Override with custom path if needed
   commit_interval_seconds: 5
   buffer_size_mb: 50
 

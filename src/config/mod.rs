@@ -158,7 +158,7 @@ impl Default for SearchConfig {
     fn default() -> Self {
         Self {
             enabled: true,  // Default to enabled
-            index_path: "./apm_search_index".to_string(),
+            index_path: Config::get_default_search_path(),
             commit_interval_seconds: 5,
             buffer_size_mb: 50,
         }
@@ -221,7 +221,7 @@ impl Default for Config {
                 port: 7337,
             },
             storage: StorageConfig {
-                database_url: "sqlite:apm.db".to_string(),
+                database_url: Self::get_default_database_path(),
                 log_retention_days: 7,
                 max_log_size_mb: 1000,
             },
@@ -233,14 +233,19 @@ impl Default for Config {
                 custom: vec![],
             },
             mcp: McpConfig {
-                enabled: false,
+                enabled: true,
                 transport: McpTransport::Tcp,
                 tcp_host: "127.0.0.1".to_string(),
                 tcp_port: 7338,
                 unix_socket: "/tmp/apm.sock".to_string(),
             },
             access_control: AccessControlConfig::default(),
-            search: SearchConfig::default(),
+            search: SearchConfig {
+                enabled: default_search_enabled(),
+                index_path: Self::get_default_search_path(),
+                commit_interval_seconds: default_search_commit_interval(),
+                buffer_size_mb: default_search_buffer_size(),
+            },
             cleanup: CleanupConfig::default(),
         }
     }
@@ -268,19 +273,19 @@ impl Config {
         let mut builder = config::Config::builder()
             .set_default("server.host", "0.0.0.0")?
             .set_default("server.port", 7337)?
-            .set_default("storage.database_url", "sqlite:apm.db")?
+            .set_default("storage.database_url", Self::get_default_database_path())?
             .set_default("storage.log_retention_days", 7)?
             .set_default("storage.max_log_size_mb", 1000)?
             .set_default("ui.theme", "dark")?
             .set_default("ui.dashboard_auth", "none")?
-            .set_default("mcp.enabled", false)?
+            .set_default("mcp.enabled", true)?
             .set_default("mcp.transport", "tcp")?
             .set_default("mcp.tcp_host", "127.0.0.1")?
             .set_default("mcp.tcp_port", 7338)?
             .set_default("mcp.unix_socket", "/tmp/apm.sock")?
             .set_default("access_control.mode", "open")?
             .set_default("search.enabled", true)?
-            .set_default("search.index_path", "./apm_search_index")?
+            .set_default("search.index_path", Self::get_default_search_path())?
             .set_default("search.commit_interval_seconds", 5)?
             .set_default("search.buffer_size_mb", 50)?
             .set_default("cleanup.auto_clean_on_startup", false)?
@@ -303,7 +308,14 @@ impl Config {
             eprintln!("Config has mcp.enabled = {}", mcp_enabled);
         }
 
-        config.try_deserialize()
+        let config = config.try_deserialize()?;
+        
+        // Ensure data directory exists after loading config
+        if let Err(e) = Self::ensure_data_dir() {
+            eprintln!("Warning: Could not create data directory: {}", e);
+        }
+        
+        Ok(config)
     }
     
     /// Get the list of config file paths in precedence order (highest to lowest)
@@ -326,9 +338,53 @@ impl Config {
         dirs::config_dir().map(|dir| dir.join("apm").join("config.yaml"))
     }
     
+    /// Get the user data directory path
+    pub fn get_data_dir() -> Option<PathBuf> {
+        if cfg!(target_os = "macos") {
+            // On macOS, both config and data go in Application Support, so use subdirectory
+            dirs::config_dir().map(|dir| dir.join("apm").join("data"))
+        } else {
+            // On Linux/Unix, use separate XDG data directory
+            dirs::data_dir().map(|dir| dir.join("apm"))
+        }
+    }
+    
+    /// Ensure data directory exists, creating it if necessary
+    pub fn ensure_data_dir() -> Result<PathBuf, std::io::Error> {
+        match Self::get_data_dir() {
+            Some(data_dir) => {
+                std::fs::create_dir_all(&data_dir)?;
+                Ok(data_dir)
+            }
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Could not determine data directory"
+            ))
+        }
+    }
+    
+    /// Get the default database path in the data directory
+    pub fn get_default_database_path() -> String {
+        match Self::get_data_dir() {
+            Some(data_dir) => format!("sqlite:{}", data_dir.join("apm.db").display()),
+            None => "sqlite:apm.db".to_string(), // Fallback to current directory
+        }
+    }
+    
+    /// Get the default search index path in the data directory
+    pub fn get_default_search_path() -> String {
+        match Self::get_data_dir() {
+            Some(data_dir) => data_dir.join("search_index").display().to_string(),
+            None => "./apm_search_index".to_string(), // Fallback to current directory
+        }
+    }
+    
     /// Create the default config file content as YAML string
     pub fn default_config_yaml() -> String {
-        r#"# APM Configuration File
+        let default_db_path = Self::get_default_database_path();
+        let default_search_path = Self::get_default_search_path();
+        
+        format!(r#"# APM Configuration File
 # This file configures the Agent Process Manager daemon
 
 # API server settings
@@ -338,7 +394,7 @@ server:
 
 # Database and storage settings
 storage:
-  database_url: "sqlite:apm.db"
+  database_url: "{}"
   log_retention_days: 7
   max_log_size_mb: 1000
 
@@ -349,7 +405,7 @@ ui:
 
 # MCP (Model Context Protocol) settings
 mcp:
-  enabled: false
+  enabled: true
   transport: "tcp"
   tcp_host: "127.0.0.1"
   tcp_port: 7338
@@ -362,7 +418,7 @@ access_control:
 # Search indexing settings
 search:
   enabled: true
-  index_path: "./apm_search_index"
+  index_path: "{}"
   commit_interval_seconds: 5
   buffer_size_mb: 50
 
@@ -372,7 +428,7 @@ cleanup:
   retention_hours: 168  # 7 days
   keep_logs: false
   keep_failed: true
-"#.to_string()
+"#, default_db_path, default_search_path)
     }
 
     pub fn load_from_path(path: &str) -> Result<Self, config::ConfigError> {
@@ -381,19 +437,19 @@ cleanup:
         let builder = config::Config::builder()
             .set_default("server.host", "0.0.0.0")?
             .set_default("server.port", 7337)?
-            .set_default("storage.database_url", "sqlite:apm.db")?
+            .set_default("storage.database_url", Self::get_default_database_path())?
             .set_default("storage.log_retention_days", 7)?
             .set_default("storage.max_log_size_mb", 1000)?
             .set_default("ui.theme", "dark")?
             .set_default("ui.dashboard_auth", "none")?
-            .set_default("mcp.enabled", false)?
+            .set_default("mcp.enabled", true)?
             .set_default("mcp.transport", "tcp")?
             .set_default("mcp.tcp_host", "127.0.0.1")?
             .set_default("mcp.tcp_port", 7338)?
             .set_default("mcp.unix_socket", "/tmp/apm.sock")?
             .set_default("access_control.mode", "open")?
             .set_default("search.enabled", true)?
-            .set_default("search.index_path", "./apm_search_index")?
+            .set_default("search.index_path", Self::get_default_search_path())?
             .set_default("search.commit_interval_seconds", 5)?
             .set_default("search.buffer_size_mb", 50)?
             .set_default("cleanup.auto_clean_on_startup", false)?
@@ -404,6 +460,13 @@ cleanup:
             .add_source(config::Environment::with_prefix("APM"))
             .build()?;
 
-        config::Config::try_deserialize(builder)
+        let config = config::Config::try_deserialize(builder)?;
+        
+        // Ensure data directory exists after loading config
+        if let Err(e) = Self::ensure_data_dir() {
+            eprintln!("Warning: Could not create data directory: {}", e);
+        }
+        
+        Ok(config)
     }
 }
