@@ -5,6 +5,11 @@
 echo "Building APM..."
 cargo build --release
 
+# Clean up any existing daemon first
+echo "Cleaning up any existing daemons..."
+./target/release/apm stop-all --force 2>/dev/null || true
+sleep 2
+
 echo -e "\n=== Test 1: Start daemon and spawn a process ==="
 echo "Starting APM daemon..."
 RUST_LOG=agent_process_manager=info ./target/release/apm start &
@@ -42,9 +47,11 @@ echo "Listing processes (should show recovered process)..."
 
 echo -e "\n=== Test 4: Clean up ==="
 echo "Stopping test process..."
-./target/release/apm stop test-server
+./target/release/apm stop test-server 2>/dev/null || true
 
 echo "Stopping daemon..."
-kill $APM_PID
+./target/release/apm stop-all --force 2>/dev/null || true
+kill $APM_PID 2>/dev/null || true
+sleep 1
 
 echo -e "\nTest complete!"

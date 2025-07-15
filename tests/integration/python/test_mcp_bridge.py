@@ -7,12 +7,12 @@ import subprocess
 import json
 import time
 
-def test_mcp_bridge():
+def test_mcp_bridge(apm_binary):
     print("=== Testing APM MCP Bridge ===\n")
     
     # Start the bridge process
     bridge_process = subprocess.Popen(
-        ['./target/debug/apm', 'mcp-bridge'],
+        [apm_binary, 'mcp-bridge'],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -74,17 +74,17 @@ def test_mcp_bridge():
                 list_response = bridge_process.stdout.readline()
                 print(f"List response: {list_response.strip()[:100]}...")
                 
-                return True
+                assert True, "Bridge working correctly"
             else:
                 print("❌ No result in response")
-                return False
+                assert False, "No result in response"
         else:
             print("❌ No response received")
-            return False
+            assert False, "No response received"
             
     except Exception as e:
         print(f"❌ Error: {e}")
-        return False
+        assert False, f"Error: {e}"
     finally:
         bridge_process.terminate()
         bridge_process.wait()

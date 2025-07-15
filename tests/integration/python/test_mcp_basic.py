@@ -3,10 +3,12 @@
 import socket
 import time
 
-def test_connection():
+def test_connection(apm_daemon):
+    """Test basic MCP connection to APM daemon."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(5)
+    
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
         sock.connect(('localhost', 7338))
         print("Connected successfully!")
         
@@ -17,22 +19,15 @@ def test_connection():
         
         # Try to receive with longer timeout
         sock.settimeout(5)
-        try:
-            response = sock.recv(1024)
-            print(f"Received: {response}")
-        except socket.timeout:
-            print("No response received within timeout")
-        except Exception as e:
-            print(f"Error receiving: {e}")
+        response = sock.recv(1024)
+        print(f"Received: {response}")
+        assert len(response) > 0, "Should receive a response"
         
         # Don't close immediately, wait a bit
         time.sleep(1)
-        sock.close()
-        return True
         
-    except Exception as e:
-        print(f"Error: {e}")
-        return False
+    finally:
+        sock.close()
 
 if __name__ == "__main__":
     test_connection()

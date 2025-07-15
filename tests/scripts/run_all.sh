@@ -48,6 +48,16 @@ for script in tests/integration/shell/test_*.sh; do
     if [ -f "$script" ]; then
         echo "  Running $(basename "$script")..."
         bash "$script"
+        
+        # Clean up between tests to avoid port conflicts
+        echo "  Cleaning up after $(basename "$script")..."
+        pkill -f "apm start" 2>/dev/null || true
+        if [ -f ./target/debug/apm ]; then
+            ./target/debug/apm stop-all --force 2>/dev/null || true
+        elif [ -f ./target/release/apm ]; then
+            ./target/release/apm stop-all --force 2>/dev/null || true
+        fi
+        sleep 1
     fi
 done
 

@@ -35,6 +35,8 @@ pub mod test_utils {
             cpu_percent: Some(0.0),
             memory_mb: Some(0),
             access_group: None,
+            cwd: None,
+            detected_ports: vec![],
         }
     }
 

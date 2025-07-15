@@ -29,19 +29,59 @@ def apm_binary():
     return str(binary_path)
 
 @pytest.fixture(scope="session")
-def apm_daemon(apm_binary):
+def test_config_session():
+    """Session-scoped test configuration file."""
+    config_content = """
+api:
+  host: "127.0.0.1"
+  port: 7337
+
+mcp:
+  enabled: true
+  transport: "tcp"
+  tcp_host: "127.0.0.1"
+  tcp_port: 7338
+
+cleanup:
+  auto_clean_on_startup: false
+  retention_hours: 24
+  keep_logs: true
+  keep_failed: true
+
+access_control:
+  mode: "open"
+"""
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        f.write(config_content)
+        config_path = f.name
+    
+    yield config_path
+    
+    # Cleanup
+    os.unlink(config_path)
+
+@pytest.fixture(scope="session")
+def apm_daemon(apm_binary, test_config_session):
     """Start APM daemon for tests."""
     # Stop any existing daemon
     subprocess.run([apm_binary, "stop-all", "--force"], 
                   capture_output=True, check=False)
     
-    # Start daemon
-    proc = subprocess.Popen([apm_binary, "start"], 
+    # Set environment to enable MCP
+    env = os.environ.copy()
+    env['APM_MCP_ENABLED'] = '1'
+    env['APM_MCP_TCP_PORT'] = '7338'
+    env['APM_MCP_TRANSPORT'] = 'tcp'
+    
+    # Start daemon with MCP enabled
+    proc = subprocess.Popen([apm_binary, "start", "--config", test_config_session], 
                            stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE)
+                           stderr=subprocess.PIPE,
+                           env=env)
     
     # Wait for daemon to start
-    time.sleep(2)
+    time.sleep(3)
     
     # Verify daemon is running
     result = subprocess.run([apm_binary, "status"], 
