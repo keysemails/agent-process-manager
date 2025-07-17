@@ -181,20 +181,25 @@ impl TmuxManager {
             let script_path = create_temp_script(session_name, command, args, env)?;
             
             // Return script execution command with cleanup and exit markers
-            format!("{} ; EXIT_CODE=$? ; echo \"Process exited with code $EXIT_CODE\" ; echo $EXIT_CODE > /tmp/apm-{}.exit-code ; touch /tmp/apm-{}.exited ; rm -f {} ; read -p 'Press enter to close session'", 
+            // Use trap to ensure exit markers are created even on interrupt
+            format!("trap 'EXIT_CODE=$?; echo \"Process exited with code $EXIT_CODE\"; echo $EXIT_CODE > /tmp/apm-{}.exit-code; touch /tmp/apm-{}.exited; rm -f {}; exit $EXIT_CODE' EXIT INT TERM; {} ; read -p 'Press enter to close session'", 
+                session_name,
+                session_name,
                 shell_quote(&script_path.to_string_lossy()),
-                session_name,
-                session_name,
                 shell_quote(&script_path.to_string_lossy()))
         } else {
             // Use traditional approach for simple commands
+            // Set up trap to ensure exit markers are created even on interrupt
+            let trap_cmd = format!("trap 'EXIT_CODE=$?; echo \"Process exited with code $EXIT_CODE\"; echo $EXIT_CODE > /tmp/apm-{}.exit-code; touch /tmp/apm-{}.exited; exit $EXIT_CODE' EXIT INT TERM", 
+                session_name, session_name);
+            
             if args.is_empty() {
-                format!("{} ; EXIT_CODE=$? ; echo \"Process exited with code $EXIT_CODE\" ; echo $EXIT_CODE > /tmp/apm-{}.exit-code ; touch /tmp/apm-{}.exited ; read -p 'Press enter to close session'", 
-                    shell_quote(command), session_name, session_name)
+                format!("{} ; {} ; read -p 'Press enter to close session'", 
+                    trap_cmd, shell_quote(command))
             } else {
                 let quoted_args: Vec<String> = args.iter().map(|arg| shell_quote(arg)).collect();
-                format!("{} {} ; EXIT_CODE=$? ; echo \"Process exited with code $EXIT_CODE\" ; echo $EXIT_CODE > /tmp/apm-{}.exit-code ; touch /tmp/apm-{}.exited ; read -p 'Press enter to close session'", 
-                    shell_quote(command), quoted_args.join(" "), session_name, session_name)
+                format!("{} ; {} {} ; read -p 'Press enter to close session'", 
+                    trap_cmd, shell_quote(command), quoted_args.join(" "))
             }
         };
         
