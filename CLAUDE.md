@@ -103,7 +103,8 @@ APM runs an MCP server by default that AI assistants can connect to:
 
 2. **list** - List processes with health metrics
    - `current_dir`: Filter to current directory only (optional, default: false)
-   - Returns: id, name, command, status, cpu_percent, memory_mb, detected_ports
+   - Returns: id, name, command, status, pid (shell), actual_pid (real process), actual_name (real command), cpu_percent, memory_mb, detected_ports
+   - **NEW**: `actual_pid` and `actual_name` show the real running process inside tmux sessions (e.g., 'node', 'python') rather than just the shell
 
 3. **logs** - Get process logs with filtering
    - `process_id`: Process ID (required)
@@ -491,6 +492,25 @@ The MCP interface now provides comprehensive process management capabilities opt
 #### Example MCP Usage for AI Agents:
 
 ```javascript
+// List processes with actual command information
+const processes = await mcp.call('list', {
+  current_dir: false
+});
+// Returns processes with actual_pid and actual_name showing real commands:
+// [
+//   {
+//     "id": "abc123",
+//     "name": "web-server",
+//     "command": "node",
+//     "pid": 1234,           // Shell PID
+//     "actual_pid": 1456,    // Real Node.js process PID
+//     "actual_name": "node", // Real process name
+//     "cpu_percent": 15.8,   // Node.js CPU usage (not shell)
+//     "memory_mb": 256,      // Node.js memory usage (not shell)
+//     "detected_ports": [8080]
+//   }
+// ]
+
 // Find all processes using high CPU
 const result = await mcp.call('query', {
   type: 'performance_metrics',
@@ -532,6 +552,36 @@ const cleaned = await mcp.call('clean', {
   older_than: 24,  // hours
   keep_logs: false
 });
+```
+
+#### AI Agent Best Practices for Process Management:
+
+```javascript
+// 1. Detect resource-intensive processes by actual command type
+const processes = await mcp.call('list', {});
+const highCpuProcesses = processes.filter(p => 
+  p.cpu_percent > 80 && p.actual_name // Only actual running processes
+);
+
+// 2. Identify process types for targeted troubleshooting
+const nodeProcesses = processes.filter(p => p.actual_name === 'node');
+const pythonProcesses = processes.filter(p => p.actual_name === 'python');
+
+// 3. Monitor memory usage by actual process, not shell
+const memoryHogs = processes.filter(p => 
+  p.actual_pid && p.memory_mb > 500 // Only check actual processes
+);
+
+// 4. Provide technology-specific advice
+function getProcessAdvice(process) {
+  if (process.actual_name === 'node' && process.memory_mb > 1000) {
+    return "High memory usage detected in Node.js process. Consider checking for memory leaks.";
+  }
+  if (process.actual_name === 'python' && process.cpu_percent > 90) {
+    return "High CPU usage in Python process. Check for infinite loops or heavy computations.";
+  }
+  return "Process running normally.";
+}
 ```
 
 ### Adding New Features
