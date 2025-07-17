@@ -254,6 +254,8 @@ impl ProcessManager {
             args: process.config.args.clone(),
             status: process.status,
             pid: process.pid,
+            actual_pid: None, // Will be populated by monitoring
+            actual_name: None, // Will be populated by monitoring
             started_at: process.started_at,
             uptime_seconds: 0,
             restart_count: process.restart_count,
@@ -287,12 +289,21 @@ impl ProcessManager {
             self.storage.update_process_status(&id, process.status, Some(pid)).await?;
         }
 
+        // Extract tmux session before moving process
+        let tmux_session = process.tmux_session.clone();
+        
         // Start monitoring the process output
         self.monitor_process_output(id.clone(), process).await;
         
         // Start monitoring process health
         if let Some(pid) = info.pid {
-            self.start_health_monitoring(id, pid).await;
+            if let Some(session) = tmux_session {
+                // Use tmux-specific health monitoring that tracks actual command
+                self.start_tmux_health_monitoring(id, pid, session).await;
+            } else {
+                // Use regular health monitoring for non-tmux processes
+                self.start_health_monitoring(id, pid).await;
+            }
         }
 
         Ok(info)
@@ -312,6 +323,58 @@ impl ProcessManager {
                     if !health.is_alive {
                         info!("Process {} (PID {}) is no longer alive, stopping monitoring", process_id, pid);
                         // The health monitor will have already sent the ProcessDied event
+                        break;
+                    }
+                }
+            }
+        });
+    }
+    
+    /// Start health monitoring for tmux processes, tracking both shell and actual command
+    async fn start_tmux_health_monitoring(&self, process_id: ProcessId, shell_pid: u32, session_name: String) {
+        let health_monitor = self.health_monitor.clone();
+        let storage = self.storage.clone();
+        
+        tokio::spawn(async move {
+            let mut system = sysinfo::System::new();
+            let mut last_actual_pid: Option<u32> = None;
+            
+            loop {
+                // Update health metrics every 2 seconds
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                
+                // Refresh process information
+                system.refresh_processes(sysinfo::ProcessesToUpdate::All);
+                
+                // Try to find the actual command PID
+                let actual_info = crate::process::tree::find_actual_command_pid(&system, shell_pid);
+                
+                // Update health with actual PID if found
+                if let Some((actual_pid, actual_name)) = actual_info {
+                    // Update storage if actual PID changed
+                    if last_actual_pid != Some(actual_pid) {
+                        info!("Tracking health for actual command: {} (PID {})", actual_name, actual_pid);
+                        last_actual_pid = Some(actual_pid);
+                        let _ = storage.update_actual_pid(&process_id, actual_pid, Some(&actual_name)).await;
+                    }
+                    
+                    // Update health with both PIDs
+                    health_monitor.update_health_with_actual_pid(&process_id, shell_pid, Some(actual_pid)).await;
+                } else {
+                    // Just monitor the shell
+                    health_monitor.update_health(&process_id, shell_pid).await;
+                }
+                
+                // Check if tmux session still exists
+                if !TmuxManager::session_exists(&session_name) {
+                    info!("Tmux session {} no longer exists, stopping health monitoring", session_name);
+                    break;
+                }
+                
+                // Check if process is still alive
+                if let Some(health) = health_monitor.get_health(&process_id).await {
+                    if !health.is_alive {
+                        info!("Process {} is no longer alive, stopping monitoring", process_id);
                         break;
                     }
                 }
@@ -347,6 +410,34 @@ impl ProcessManager {
         let pid = TmuxManager::get_session_pid(&session_name)
             .ok();
         
+        // Find the actual command PID (not just the shell)
+        let (actual_pid, actual_name) = if let Some(shell_pid) = pid {
+            // Create a system instance to find child processes
+            let mut system = sysinfo::System::new();
+            system.refresh_processes(sysinfo::ProcessesToUpdate::All);
+            
+            // Try to find the actual command a few times as it may take a moment to spawn
+            let mut actual_process = None;
+            for _ in 0..10 {
+                if let Some((cmd_pid, cmd_name)) = crate::process::tree::find_actual_command_pid(&system, shell_pid) {
+                    info!("Found actual command process: {} (PID {})", cmd_name, cmd_pid);
+                    actual_process = Some((cmd_pid, cmd_name));
+                    break;
+                }
+                // Wait a bit and refresh
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                system.refresh_processes(sysinfo::ProcessesToUpdate::All);
+            }
+            
+            if actual_process.is_none() {
+                info!("No actual command found yet for tmux session {}, will monitor shell PID {}", session_name, shell_pid);
+            }
+            
+            (actual_process.as_ref().map(|(pid, _)| *pid), actual_process.map(|(_, name)| name))
+        } else {
+            (None, None)
+        };
+        
         // Register with exit monitor if we have a PID
         if let Some(pid_val) = pid {
             self.exit_monitor.register_tmux_process(
@@ -354,6 +445,12 @@ impl ProcessManager {
                 pid_val,
                 session_name.clone()
             ).await;
+        }
+        
+        // Store actual PID info in storage if we found it
+        if let Some(actual_pid_val) = actual_pid {
+            self.storage.update_actual_pid(&id, actual_pid_val, actual_name.as_deref()).await
+                .unwrap_or_else(|e| error!("Failed to update actual PID: {}", e));
         }
         
         // Start log monitoring
@@ -533,6 +630,10 @@ impl ProcessManager {
                 
                 let mut process_exit_detected = false;
                 
+                // Create system instance for process tracking
+                let mut system = sysinfo::System::new();
+                let mut last_actual_pid: Option<u32> = None;
+                
                 loop {
                     // First, check for file markers (instant detection)
                     let exit_marker_path = format!("/tmp/apm-{}.exited", session);
@@ -558,6 +659,21 @@ impl ProcessManager {
                         let _ = std::fs::remove_file(&exit_code_path);
                         
                         // Continue monitoring until session is actually closed
+                    }
+                    
+                    // Update actual command PID tracking
+                    if let Ok(shell_pid) = TmuxManager::get_session_pid(&session) {
+                        system.refresh_processes(sysinfo::ProcessesToUpdate::All);
+                        
+                        if let Some((actual_pid, actual_name)) = crate::process::tree::find_actual_command_pid(&system, shell_pid) {
+                            if last_actual_pid != Some(actual_pid) {
+                                info!("Actual command PID updated for {}: {} ({})", process_id, actual_name, actual_pid);
+                                last_actual_pid = Some(actual_pid);
+                                
+                                // Update storage with actual PID
+                                let _ = storage.update_actual_pid(&process_id, actual_pid, Some(&actual_name)).await;
+                            }
+                        }
                     }
                     
                     // Sleep before next check
@@ -643,6 +759,8 @@ impl ProcessManager {
             args: process_record.config.args.clone(),
             status: process_record.status,
             pid: process_record.pid,
+            actual_pid: process_record.actual_pid,
+            actual_name: process_record.actual_name.clone(),
             started_at: process_record.started_at,
             uptime_seconds: uptime,
             restart_count: process_record.restart_count,
@@ -701,6 +819,8 @@ impl ProcessManager {
                 args: proc.config.args.clone(),
                 status: proc.status,
                 pid: proc.pid,
+                actual_pid: proc.actual_pid,
+                actual_name: proc.actual_name.clone(),
                 started_at: proc.started_at,
                 uptime_seconds: uptime,
                 restart_count: proc.restart_count,
@@ -814,6 +934,8 @@ impl ProcessManager {
             args: config.args.clone(),
             status: process.status,
             pid: process.pid,
+            actual_pid: None, // Will be populated by monitoring
+            actual_name: None, // Will be populated by monitoring
             started_at: process.started_at,
             uptime_seconds: 0,
             restart_count: old_restart_count + 1,
@@ -825,12 +947,21 @@ impl ProcessManager {
             detected_ports: vec![], // Will be populated as logs are processed
         };
 
+        // Extract tmux session before moving process
+        let tmux_session = process.tmux_session.clone();
+        
         // Start monitoring the process output
         self.monitor_process_output(id.clone(), process).await;
         
         // Start monitoring process health
         if let Some(pid) = info.pid {
-            self.start_health_monitoring(id.clone(), pid).await;
+            if let Some(session) = tmux_session {
+                // Use tmux-specific health monitoring that tracks actual command
+                self.start_tmux_health_monitoring(id.clone(), pid, session).await;
+            } else {
+                // Use regular health monitoring for non-tmux processes
+                self.start_health_monitoring(id.clone(), pid).await;
+            }
         }
 
         Ok(info)

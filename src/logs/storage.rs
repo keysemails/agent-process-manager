@@ -116,6 +116,8 @@ impl LogStorage {
                 started_at DATETIME NOT NULL,
                 stopped_at DATETIME,
                 pid INTEGER,
+                actual_pid INTEGER,  -- PID of the actual command (not the shell)
+                actual_name TEXT,    -- Name of the actual command process
                 tmux_session TEXT,
                 restart_count INTEGER DEFAULT 0,
                 config TEXT NOT NULL,  -- Full ProcessConfig as JSON
@@ -138,6 +140,14 @@ impl LogStorage {
         "#)
         .execute(&db)
         .await?;
+
+        // Add actual_pid and actual_name columns if they don't exist (for existing databases)
+        let _ = sqlx::query("ALTER TABLE processes ADD COLUMN actual_pid INTEGER")
+            .execute(&db)
+            .await;
+        let _ = sqlx::query("ALTER TABLE processes ADD COLUMN actual_name TEXT")
+            .execute(&db)
+            .await;
 
         Ok(Self {
             db,
@@ -435,7 +445,7 @@ impl LogStorage {
         let status_str = serde_json::to_string(&status)?;
         let status_str = status_str.trim_matches('"');
         
-        if status == ProcessStatus::Stopped || status == ProcessStatus::Failed {
+        if status == ProcessStatus::Stopped || status == ProcessStatus::Failed || status == ProcessStatus::Killed {
             sqlx::query(r#"
                 UPDATE processes 
                 SET status = ?, pid = ?, stopped_at = ?, updated_at = CURRENT_TIMESTAMP 
@@ -462,10 +472,26 @@ impl LogStorage {
         
         Ok(())
     }
+
+    /// Update the actual command PID (not the shell PID) for a process
+    pub async fn update_actual_pid(&self, id: &ProcessId, actual_pid: u32, actual_name: Option<&str>) -> Result<()> {
+        sqlx::query(r#"
+            UPDATE processes 
+            SET actual_pid = ?, actual_name = ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE id = ?
+        "#)
+        .bind(actual_pid as i64)
+        .bind(actual_name)
+        .bind(id.to_string())
+        .execute(&self.db)
+        .await?;
+        
+        Ok(())
+    }
     
     pub async fn get_process(&self, id: &ProcessId) -> Result<Option<ProcessRecord>> {
         let row = sqlx::query(
-            "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+            "SELECT id, name, command, args, status, started_at, stopped_at, pid, actual_pid, actual_name, tmux_session, restart_count, config 
              FROM processes WHERE id = ?"
         )
         .bind(id.to_string())
@@ -484,13 +510,13 @@ impl LogStorage {
             let status_str = serde_json::to_string(&status)?;
             let status_str = status_str.trim_matches('"').to_string();
             sqlx::query(
-                "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+                "SELECT id, name, command, args, status, started_at, stopped_at, pid, actual_pid, actual_name, tmux_session, restart_count, config 
                  FROM processes WHERE status = ? ORDER BY started_at DESC"
             )
             .bind(status_str)
         } else {
             sqlx::query(
-                "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+                "SELECT id, name, command, args, status, started_at, stopped_at, pid, actual_pid, actual_name, tmux_session, restart_count, config 
                  FROM processes ORDER BY started_at DESC"
             )
         };
@@ -511,7 +537,7 @@ impl LogStorage {
                 let status_str = serde_json::to_string(&status)?;
                 let status_str = status_str.trim_matches('"').to_string();
                 sqlx::query(
-                    "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+                    "SELECT id, name, command, args, status, started_at, stopped_at, pid, actual_pid, actual_name, tmux_session, restart_count, config 
                      FROM processes WHERE access_group = ? AND status = ? ORDER BY started_at DESC"
                 )
                 .bind(group)
@@ -519,7 +545,7 @@ impl LogStorage {
             }
             (Some(group), None) => {
                 sqlx::query(
-                    "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+                    "SELECT id, name, command, args, status, started_at, stopped_at, pid, actual_pid, actual_name, tmux_session, restart_count, config 
                      FROM processes WHERE access_group = ? ORDER BY started_at DESC"
                 )
                 .bind(group)
@@ -528,14 +554,14 @@ impl LogStorage {
                 let status_str = serde_json::to_string(&status)?;
                 let status_str = status_str.trim_matches('"').to_string();
                 sqlx::query(
-                    "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+                    "SELECT id, name, command, args, status, started_at, stopped_at, pid, actual_pid, actual_name, tmux_session, restart_count, config 
                      FROM processes WHERE status = ? ORDER BY started_at DESC"
                 )
                 .bind(status_str)
             }
             (None, None) => {
                 sqlx::query(
-                    "SELECT id, name, command, args, status, started_at, stopped_at, pid, tmux_session, restart_count, config 
+                    "SELECT id, name, command, args, status, started_at, stopped_at, pid, actual_pid, actual_name, tmux_session, restart_count, config 
                      FROM processes ORDER BY started_at DESC"
                 )
             }
@@ -729,6 +755,8 @@ pub struct ProcessRecord {
     pub started_at: DateTime<Utc>,
     pub stopped_at: Option<DateTime<Utc>>,
     pub pid: Option<u32>,
+    pub actual_pid: Option<u32>,
+    pub actual_name: Option<String>,
     pub tmux_session: Option<String>,
     pub restart_count: u32,
     pub config: ProcessConfig,
@@ -751,6 +779,7 @@ impl ProcessRecord {
         let config: ProcessConfig = serde_json::from_str(&config_json)?;
         
         let pid: Option<i64> = row.try_get("pid")?;
+        let actual_pid: Option<i64> = row.try_get("actual_pid")?;
         
         Ok(ProcessRecord {
             id,
@@ -761,6 +790,8 @@ impl ProcessRecord {
             started_at: row.try_get("started_at")?,
             stopped_at: row.try_get("stopped_at")?,
             pid: pid.map(|p| p as u32),
+            actual_pid: actual_pid.map(|p| p as u32),
+            actual_name: row.try_get("actual_name")?,
             tmux_session: row.try_get("tmux_session")?,
             restart_count: row.try_get::<i64, _>("restart_count")? as u32,
             config,

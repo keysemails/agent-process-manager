@@ -42,10 +42,30 @@ impl HealthMonitor {
     }
 
     pub async fn update_health(&self, process_id: &ProcessId, pid: u32) {
+        self.update_health_with_actual_pid(process_id, pid, None).await;
+    }
+
+    /// Update health for a process, optionally tracking both shell and actual command PIDs
+    pub async fn update_health_with_actual_pid(
+        &self, 
+        process_id: &ProcessId, 
+        shell_pid: u32,
+        actual_pid: Option<u32>
+    ) {
         let mut system = self.system.write().await;
-        let pid = Pid::from(pid as usize);
+        
+        // Determine which PID to monitor for health metrics
+        let monitor_pid = actual_pid.unwrap_or(shell_pid);
+        let pid = Pid::from(monitor_pid as usize);
+        
+        // Refresh specific processes
+        let mut pids_to_refresh = vec![Pid::from(shell_pid as usize)];
+        if let Some(actual) = actual_pid {
+            pids_to_refresh.push(Pid::from(actual as usize));
+        }
+        
         system.refresh_processes_specifics(
-            sysinfo::ProcessesToUpdate::Some(&[pid]),
+            sysinfo::ProcessesToUpdate::Some(&pids_to_refresh),
             sysinfo::ProcessRefreshKind::new()
                 .with_cpu()
                 .with_memory(),
@@ -57,6 +77,7 @@ impl HealthMonitor {
             .map(|h| h.is_alive)
             .unwrap_or(true);
 
+        // Check if the monitored process exists
         if let Some(process) = system.process(pid) {
             let health = ProcessHealth {
                 cpu_percent: process.cpu_usage(),

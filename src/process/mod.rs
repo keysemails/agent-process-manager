@@ -3,6 +3,7 @@
 pub mod supervisor;
 pub mod health;
 pub mod exit_monitor;
+pub mod tree;
 
 pub use supervisor::{ProcessManager, ProcessConfig, Process};
 pub use health::HealthMonitor;
@@ -34,6 +35,10 @@ pub struct ProcessInfo {
     pub args: Vec<String>,
     pub status: ProcessStatus,
     pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_name: Option<String>,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub uptime_seconds: u64,
     pub restart_count: u32,
