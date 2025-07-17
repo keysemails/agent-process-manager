@@ -41,15 +41,6 @@ pub enum ProcessExitEvent {
 #[derive(Debug)]
 struct ProcessInfo {
     process_id: ProcessId,
-    pid: u32,
-    monitor_type: ProcessMonitorType,
-}
-
-#[derive(Debug, Clone)]
-enum ProcessMonitorType {
-    Tmux { session_name: String },
-    Pty,
-    Direct,
 }
 
 pub struct ProcessExitMonitor {
@@ -82,12 +73,9 @@ impl ProcessExitMonitor {
         &self,
         process_id: ProcessId,
         pid: u32,
-        monitor_type: ProcessMonitorType,
     ) {
         let process_info = ProcessInfo {
             process_id: process_id.clone(),
-            pid,
-            monitor_type,
         };
 
         self.pid_map.write().await.insert(pid, process_info);
@@ -99,18 +87,14 @@ impl ProcessExitMonitor {
         &self,
         process_id: ProcessId,
         pid: u32,
-        session_name: String,
+        _session_name: String,
     ) {
-        self.register_process(
-            process_id,
-            pid,
-            ProcessMonitorType::Tmux { session_name },
-        ).await;
+        self.register_process(process_id, pid).await;
     }
 
     /// Register a PTY process
     pub async fn register_pty_process(&self, process_id: ProcessId, pid: u32) {
-        self.register_process(process_id, pid, ProcessMonitorType::Pty).await;
+        self.register_process(process_id, pid).await;
     }
 
     /// Unregister a process from monitoring
