@@ -103,8 +103,8 @@ APM runs an MCP server by default that AI assistants can connect to:
 
 2. **list** - List processes with health metrics
    - `current_dir`: Filter to current directory only (optional, default: false)
-   - Returns: id, name, command, status, pid (shell), actual_pid (real process), actual_name (real command), cpu_percent, memory_mb, detected_ports
-   - **NEW**: `actual_pid` and `actual_name` show the real running process inside tmux sessions (e.g., 'node', 'python') rather than just the shell
+   - Returns: id, name, command, status, session_pid (tmux session), process_pid (application process), process_name (application name), cpu_percent, memory_mb, detected_ports
+   - **NEW**: `process_pid` and `process_name` show the real running application inside tmux sessions (e.g., 'node', 'python') rather than just the shell
 
 3. **logs** - Get process logs with filtering
    - `process_id`: Process ID (required)
@@ -496,17 +496,17 @@ The MCP interface now provides comprehensive process management capabilities opt
 const processes = await mcp.call('list', {
   current_dir: false
 });
-// Returns processes with actual_pid and actual_name showing real commands:
+// Returns processes with process_pid and process_name showing real applications:
 // [
 //   {
 //     "id": "abc123",
 //     "name": "web-server",
 //     "command": "node",
-//     "pid": 1234,           // Shell PID
-//     "actual_pid": 1456,    // Real Node.js process PID
-//     "actual_name": "node", // Real process name
-//     "cpu_percent": 15.8,   // Node.js CPU usage (not shell)
-//     "memory_mb": 256,      // Node.js memory usage (not shell)
+//     "session_pid": 1234,     // Tmux session PID
+//     "process_pid": 1456,     // Real Node.js application PID
+//     "process_name": "node",  // Real application name
+//     "cpu_percent": 15.8,     // Node.js CPU usage (not shell)
+//     "memory_mb": 256,        // Node.js memory usage (not shell)
 //     "detected_ports": [8080]
 //   }
 // ]
@@ -557,27 +557,27 @@ const cleaned = await mcp.call('clean', {
 #### AI Agent Best Practices for Process Management:
 
 ```javascript
-// 1. Detect resource-intensive processes by actual command type
+// 1. Detect resource-intensive processes by application type
 const processes = await mcp.call('list', {});
 const highCpuProcesses = processes.filter(p => 
-  p.cpu_percent > 80 && p.actual_name // Only actual running processes
+  p.cpu_percent > 80 && p.process_name // Only actual running applications
 );
 
 // 2. Identify process types for targeted troubleshooting
-const nodeProcesses = processes.filter(p => p.actual_name === 'node');
-const pythonProcesses = processes.filter(p => p.actual_name === 'python');
+const nodeProcesses = processes.filter(p => p.process_name === 'node');
+const pythonProcesses = processes.filter(p => p.process_name === 'python');
 
-// 3. Monitor memory usage by actual process, not shell
+// 3. Monitor memory usage by application process, not session
 const memoryHogs = processes.filter(p => 
-  p.actual_pid && p.memory_mb > 500 // Only check actual processes
+  p.process_pid && p.memory_mb > 500 // Only check actual applications
 );
 
 // 4. Provide technology-specific advice
 function getProcessAdvice(process) {
-  if (process.actual_name === 'node' && process.memory_mb > 1000) {
+  if (process.process_name === 'node' && process.memory_mb > 1000) {
     return "High memory usage detected in Node.js process. Consider checking for memory leaks.";
   }
-  if (process.actual_name === 'python' && process.cpu_percent > 90) {
+  if (process.process_name === 'python' && process.cpu_percent > 90) {
     return "High CPU usage in Python process. Check for infinite loops or heavy computations.";
   }
   return "Process running normally.";

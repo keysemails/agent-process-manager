@@ -288,9 +288,9 @@ impl McpServerHandler {
                             "command": info.command,
                             "status": info.status,
                             "created_at": info.started_at,
-                            "pid": info.pid,
-                            "actual_pid": info.actual_pid,
-                            "actual_name": info.actual_name,
+                            "session_pid": info.session_pid,
+                            "process_pid": info.process_pid,
+                            "process_name": info.process_name,
                             "uptime_seconds": info.uptime_seconds,
                             "restart_count": info.restart_count,
                             "cpu_percent": info.cpu_percent,
@@ -1258,7 +1258,7 @@ Common search patterns:
             },
             Tool {
                 name: Cow::Borrowed("list"),
-                description: Some(Cow::Borrowed("List processes with health metrics. Returns: id, name, command, status, pid (shell), actual_pid (real process), actual_name (real command), cpu_percent, memory_mb, detected_ports. The actual_pid and actual_name fields show the real running process inside tmux sessions (e.g., 'node', 'python') rather than just the shell.")),
+                description: Some(Cow::Borrowed("List processes with health metrics. Returns: id, name, command, status, session_pid (tmux session), process_pid (application process), process_name (application name), cpu_percent, memory_mb, detected_ports. The process_pid and process_name fields show the real running application inside tmux sessions (e.g., 'node', 'python') rather than just the shell.")),
                 input_schema: Arc::new(serde_json::from_value(json!({
                     "type": "object",
                     "properties": {

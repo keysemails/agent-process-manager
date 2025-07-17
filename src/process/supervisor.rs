@@ -67,7 +67,7 @@ pub struct Process {
     pub status: ProcessStatus,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub restart_count: u32,
-    pub pid: Option<u32>,
+    pub session_pid: Option<u32>,
     #[allow(dead_code)]
     pty_master: Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>,
     #[allow(dead_code)]
@@ -187,11 +187,11 @@ impl ProcessManager {
                 if let Ok(processes) = storage.list_processes(Some(ProcessStatus::Running)).await {
                     for process in processes {
                         // Skip if no PID
-                        if let Some(pid) = process.pid {
+                        if let Some(session_pid) = process.session_pid {
                             // Check health status
                             if let Some(health) = health_monitor.get_health(&process.id).await {
                                 if !health.is_alive {
-                                    info!("Reconciliation: Process {} (PID {}) is dead but marked as running", process.id, pid);
+                                    info!("Reconciliation: Process {} (session PID {}) is dead but marked as running", process.id, session_pid);
                                     let _ = storage.update_process_status(&process.id, ProcessStatus::Stopped, None).await;
                                 }
                             }
@@ -236,8 +236,8 @@ impl ProcessManager {
         };
 
         // Get initial health metrics if PID is available
-        let (cpu_percent, memory_mb) = if let Some(pid) = process.pid {
-            self.health_monitor.update_health(&id, pid).await;
+        let (cpu_percent, memory_mb) = if let Some(session_pid) = process.session_pid {
+            self.health_monitor.update_health(&id, session_pid).await;
             if let Some(health) = self.health_monitor.get_health(&id).await {
                 (Some(health.cpu_percent), Some(health.memory_mb))
             } else {
@@ -253,9 +253,9 @@ impl ProcessManager {
             command: process.config.command.clone(),
             args: process.config.args.clone(),
             status: process.status,
-            pid: process.pid,
-            actual_pid: None, // Will be populated by monitoring
-            actual_name: None, // Will be populated by monitoring
+            session_pid: process.session_pid,
+            process_pid: None, // Will be populated by monitoring
+            process_name: None, // Will be populated by monitoring
             started_at: process.started_at,
             uptime_seconds: 0,
             restart_count: process.restart_count,
@@ -285,8 +285,8 @@ impl ProcessManager {
         ).await?;
         
         // Update with PID if available
-        if let Some(pid) = process.pid {
-            self.storage.update_process_status(&id, process.status, Some(pid)).await?;
+        if let Some(session_pid) = process.session_pid {
+            self.storage.update_process_status(&id, process.status, Some(session_pid)).await?;
         }
 
         // Extract tmux session before moving process
@@ -296,13 +296,13 @@ impl ProcessManager {
         self.monitor_process_output(id.clone(), process).await;
         
         // Start monitoring process health
-        if let Some(pid) = info.pid {
+        if let Some(session_pid) = info.session_pid {
             if let Some(session) = tmux_session {
                 // Use tmux-specific health monitoring that tracks actual command
-                self.start_tmux_health_monitoring(id, pid, session).await;
+                self.start_tmux_health_monitoring(id, session_pid, session).await;
             } else {
                 // Use regular health monitoring for non-tmux processes
-                self.start_health_monitoring(id, pid).await;
+                self.start_health_monitoring(id, session_pid).await;
             }
         }
 
@@ -355,7 +355,7 @@ impl ProcessManager {
                     if last_actual_pid != Some(actual_pid) {
                         info!("Tracking health for actual command: {} (PID {})", actual_name, actual_pid);
                         last_actual_pid = Some(actual_pid);
-                        let _ = storage.update_actual_pid(&process_id, actual_pid, Some(&actual_name)).await;
+                        let _ = storage.update_process_pid(&process_id, actual_pid, Some(&actual_name)).await;
                     }
                     
                     // Update health with both PIDs
@@ -449,7 +449,7 @@ impl ProcessManager {
         
         // Store actual PID info in storage if we found it
         if let Some(actual_pid_val) = actual_pid {
-            self.storage.update_actual_pid(&id, actual_pid_val, actual_name.as_deref()).await
+            self.storage.update_process_pid(&id, actual_pid_val, actual_name.as_deref()).await
                 .unwrap_or_else(|e| error!("Failed to update actual PID: {}", e));
         }
         
@@ -548,7 +548,7 @@ impl ProcessManager {
             status: ProcessStatus::Running,
             started_at: chrono::Utc::now(),
             restart_count: 0,
-            pid,
+            session_pid: pid,
             pty_master: None, // No direct PTY access with tmux
             child: None, // No direct child process
             tmux_session: Some(session_name),
@@ -594,7 +594,7 @@ impl ProcessManager {
             status: ProcessStatus::Running,
             started_at: chrono::Utc::now(),
             restart_count: 0,
-            pid,
+            session_pid: pid,
             pty_master: Some(Arc::new(Mutex::new(pty_pair.master))),
             child: Some(child),
             tmux_session: None,
@@ -671,7 +671,7 @@ impl ProcessManager {
                                 last_actual_pid = Some(actual_pid);
                                 
                                 // Update storage with actual PID
-                                let _ = storage.update_actual_pid(&process_id, actual_pid, Some(&actual_name)).await;
+                                let _ = storage.update_process_pid(&process_id, actual_pid, Some(&actual_name)).await;
                             }
                         }
                     }
@@ -735,7 +735,7 @@ impl ProcessManager {
         };
 
         // Get current health metrics
-        let (cpu_percent, memory_mb) = if let Some(_pid) = process_record.pid {
+        let (cpu_percent, memory_mb) = if let Some(_pid) = process_record.session_pid {
             if let Some(health) = self.health_monitor.get_health(id).await {
                 (Some(health.cpu_percent), Some(health.memory_mb))
             } else {
@@ -758,9 +758,9 @@ impl ProcessManager {
             command: process_record.config.command.clone(),
             args: process_record.config.args.clone(),
             status: process_record.status,
-            pid: process_record.pid,
-            actual_pid: process_record.actual_pid,
-            actual_name: process_record.actual_name.clone(),
+            session_pid: process_record.session_pid,
+            process_pid: process_record.process_pid,
+            process_name: process_record.process_name.clone(),
             started_at: process_record.started_at,
             uptime_seconds: uptime,
             restart_count: process_record.restart_count,
@@ -791,7 +791,7 @@ impl ProcessManager {
             };
 
             // Get current health metrics
-            let (cpu_percent, memory_mb) = if let Some(_pid) = proc.pid {
+            let (cpu_percent, memory_mb) = if let Some(_session_pid) = proc.session_pid {
                 if let Some(health) = self.health_monitor.get_health(&proc.id).await {
                     (Some(health.cpu_percent), Some(health.memory_mb))
                 } else {
@@ -818,9 +818,9 @@ impl ProcessManager {
                 command: proc.config.command.clone(),
                 args: proc.config.args.clone(),
                 status: proc.status,
-                pid: proc.pid,
-                actual_pid: proc.actual_pid,
-                actual_name: proc.actual_name.clone(),
+                session_pid: proc.session_pid,
+                process_pid: proc.process_pid,
+                process_name: proc.process_name.clone(),
                 started_at: proc.started_at,
                 uptime_seconds: uptime,
                 restart_count: proc.restart_count,
@@ -841,13 +841,13 @@ impl ProcessManager {
             .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
 
         // Update status to stopping
-        self.storage.update_process_status(id, ProcessStatus::Stopping, process_record.pid).await?;
+        self.storage.update_process_status(id, ProcessStatus::Stopping, process_record.session_pid).await?;
 
         // Handle tmux session termination
         if let Some(tmux_session) = &process_record.tmux_session {
             use crate::tmux::TmuxManager;
             TmuxManager::kill_session(tmux_session)?;
-        } else if let Some(pid) = process_record.pid {
+        } else if let Some(pid) = process_record.session_pid {
             // For non-tmux processes, try to kill by PID
             use std::process::Command;
             let _ = Command::new("kill")
@@ -856,13 +856,13 @@ impl ProcessManager {
         }
 
         // Update status to stopped
-        self.storage.update_process_status(id, ProcessStatus::Stopped, process_record.pid).await?;
+        self.storage.update_process_status(id, ProcessStatus::Stopped, process_record.session_pid).await?;
         
         // Remove from health monitor
         self.health_monitor.remove_process(id).await;
         
         // Remove from exit monitor if we have a PID
-        if let Some(pid) = process_record.pid {
+        if let Some(pid) = process_record.session_pid {
             self.exit_monitor.unregister_process(pid).await;
         }
         
@@ -911,13 +911,13 @@ impl ProcessManager {
             tmux_session.as_deref()
         ).await?;
         
-        if let Some(pid) = process.pid {
-            self.storage.update_process_status(id, process.status, Some(pid)).await?;
+        if let Some(session_pid) = process.session_pid {
+            self.storage.update_process_status(id, process.status, Some(session_pid)).await?;
         }
         
         // Get initial health metrics if PID is available
-        let (cpu_percent, memory_mb) = if let Some(pid) = process.pid {
-            self.health_monitor.update_health(id, pid).await;
+        let (cpu_percent, memory_mb) = if let Some(session_pid) = process.session_pid {
+            self.health_monitor.update_health(id, session_pid).await;
             if let Some(health) = self.health_monitor.get_health(id).await {
                 (Some(health.cpu_percent), Some(health.memory_mb))
             } else {
@@ -933,9 +933,9 @@ impl ProcessManager {
             command: config.command.clone(),
             args: config.args.clone(),
             status: process.status,
-            pid: process.pid,
-            actual_pid: None, // Will be populated by monitoring
-            actual_name: None, // Will be populated by monitoring
+            session_pid: process.session_pid,
+            process_pid: None, // Will be populated by monitoring
+            process_name: None, // Will be populated by monitoring
             started_at: process.started_at,
             uptime_seconds: 0,
             restart_count: old_restart_count + 1,
@@ -954,13 +954,13 @@ impl ProcessManager {
         self.monitor_process_output(id.clone(), process).await;
         
         // Start monitoring process health
-        if let Some(pid) = info.pid {
+        if let Some(session_pid) = info.session_pid {
             if let Some(session) = tmux_session {
                 // Use tmux-specific health monitoring that tracks actual command
-                self.start_tmux_health_monitoring(id.clone(), pid, session).await;
+                self.start_tmux_health_monitoring(id.clone(), session_pid, session).await;
             } else {
                 // Use regular health monitoring for non-tmux processes
-                self.start_health_monitoring(id.clone(), pid).await;
+                self.start_health_monitoring(id.clone(), session_pid).await;
             }
         }
 
