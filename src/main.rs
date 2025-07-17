@@ -645,11 +645,11 @@ async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyho
                 }
                 "csv" => {
                     // CSV output
-                    println!("name,status,pid,uptime_seconds,started_at,ports,directory");
+                    println!("name,status,session_pid,uptime_seconds,started_at,ports,directory");
                     for process in filtered_processes {
                         let name = process["name"].as_str().unwrap_or("");
                         let status = process["status"].as_str().unwrap_or("");
-                        let pid = process["pid"].as_u64().unwrap_or(0);
+                        let session_pid = process["session_pid"].as_u64().unwrap_or(0);
                         let uptime = process["uptime_seconds"].as_u64().unwrap_or(0);
                         let started = process["started_at"].as_str().unwrap_or("");
                         let ports = if let Some(ports) = process["detected_ports"].as_array() {
@@ -661,7 +661,7 @@ async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyho
                             String::new()
                         };
                         let cwd = process["cwd"].as_str().unwrap_or("");
-                        println!("{},{},{},{},{},{},{}", name, status, pid, uptime, started, ports, cwd);
+                        println!("{},{},{},{},{},{},{}", name, status, session_pid, uptime, started, ports, cwd);
                     }
                 }
                 _ => {
@@ -689,7 +689,7 @@ async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyho
                     };
                     
                     println!("{:<15} {:<8} {:<8} {:<8} {:<10} {:<10} {:<width$}", 
-                        "NAME", "STATUS", "PID", "UPTIME", "STARTED", "PORTS", "DIRECTORY",
+                        "NAME", "STATUS", "SESSION_PID", "UPTIME", "STARTED", "PORTS", "DIRECTORY",
                         width = dir_width
                     );
                     println!("{}", "-".repeat(fixed_width + dir_width));
@@ -786,7 +786,7 @@ async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyho
                         "{:<15} {:<8} {:<8} {:<8} {:<10} {:<10}",
                         name_display,
                         status_colored,
-                        process["pid"].as_u64().unwrap_or(0),
+                        process["session_pid"].as_u64().unwrap_or(0),
                         format!("{}s", process["uptime_seconds"].as_u64().unwrap_or(0)),
                         started_str,
                         ports_colored
@@ -799,7 +799,7 @@ async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyho
                         "{:<15} {:<8} {:<8} {:<8} {:<10} {:<10} {:<width$}",
                         name_display,
                         status_colored,
-                        process["pid"].as_u64().unwrap_or(0),
+                        process["session_pid"].as_u64().unwrap_or(0),
                         format!("{}s", process["uptime_seconds"].as_u64().unwrap_or(0)),
                         started_str,
                         ports_colored,

@@ -282,6 +282,8 @@ impl McpServerHandler {
                 let process_list: Vec<Value> = filtered_processes
                     .into_iter()
                     .map(|info| {
+                        debug!("MCP list serializing process: id={}, session_pid={:?}, process_pid={:?}, process_name={:?}", 
+                               info.id, info.session_pid, info.process_pid, info.process_name);
                         json!({
                             "id": info.id.to_string(),
                             "name": info.name,
