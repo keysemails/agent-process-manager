@@ -112,18 +112,18 @@ APM runs an MCP server by default that AI assistants can connect to:
    - `level`: Log level filter - debug/info/warn/error (optional)
    - `since`: RFC3339 timestamp for time filtering (optional)
 
-4. **stop** - Stop a single process
+4. **kill** - Kill a single process (terminate tmux session)
    - `process_id`: Process ID (required)
 
 5. **restart** - Restart a process
    - `process_id`: Process ID (required)
    - Returns: new process_id, restart_count
 
-6. **stop_multiple** - Stop multiple processes
-   - `current_dir`: Only stop processes from current directory (optional)
-   - `names`: List of process names to stop (optional)
+6. **kill_multiple** - Kill multiple processes
+   - `current_dir`: Only kill processes from current directory (optional)
+   - `names`: List of process names to kill (optional)
    - `force`: Skip confirmation (optional)
-   - Returns: stopped count, failed count, errors
+   - Returns: killed count, failed count, errors
 
 7. **clean** - Clean stopped processes
    - `older_than`: Hours threshold (optional)
@@ -137,7 +137,7 @@ APM runs an MCP server by default that AI assistants can connect to:
      - `process_errors`: Error analysis across processes
      - `port_mapping`: Port and URL usage mapping
      - `performance_metrics`: CPU/memory metrics and alerts
-     - `log_search`: Search logs across processes
+     - `log_search`: Search logs across processes (simple pattern matching)
      - `event_correlation`: Correlate events across processes
    - Common parameters:
      - `current_dir`: Filter to current directory (optional)
@@ -150,6 +150,28 @@ APM runs an MCP server by default that AI assistants can connect to:
      - `limit`: Result limit for log_search
      - `event_types`: Event types for correlation (required for event_correlation)
      - `min_severity`: Minimum severity for process_errors
+
+9. **search** - Full-text search across all process logs (if search is enabled)
+   - `query`: Lucene-compatible search query (required)
+     - Simple: `"error"`, `"database connection"`
+     - Boolean: `"error AND timeout"`, `"database OR cache"`, `"error NOT retry"`
+     - Fuzzy: `"databse~"` (finds "database"), `"conection~2"` (2 edits allowed)
+     - Wildcards: `"time*"`, `"*base"`, `"dat?base"`
+     - Phrases: `"connection timeout"` (exact phrase)
+     - Field search: `"level:error"`, `"process_id:12345"`
+   - `process_id`: Filter by specific process ID (optional)
+   - `level`: Filter by log level - debug/info/warn/error (optional)
+   - `since`: RFC3339 timestamp for start of time range (optional)
+   - `until`: RFC3339 timestamp for end of time range (optional)
+   - `limit`: Max results, default 50, max 1000 (optional)
+   - `offset`: For pagination (optional)
+   - `highlight`: Include highlighted snippets (optional)
+   - Returns: Relevance-ranked results with scores, timestamps, and patterns
+   
+   **When to use search vs logs vs query:**
+   - Use `search` for: Complex queries, cross-process searches, fuzzy matching, relevance ranking
+   - Use `logs` for: Simple filtering within one process, recent logs only
+   - Use `query` with `log_search` for: Pattern matching when full-text search is disabled
 
 ## CLI Commands
 
@@ -164,11 +186,11 @@ apm list                          # List processes visible from current director
 apm list --all                    # List all processes regardless of directory
 apm logs <name>                   # View process logs (from current directory)
 apm logs <name> --all             # View logs of any process
-apm stop <name>                   # Stop a process (from current directory)
-apm stop <name> --all             # Stop any process
-apm stop-all                      # Stop all processes (with confirmation)
-apm stop-all --force              # Stop all processes without confirmation
-apm stop-all --current-dir        # Stop only processes from current directory
+apm kill <name>                   # Kill a process (from current directory)
+apm kill <name> --all             # Kill any process
+apm kill-all                      # Kill all processes (with confirmation)
+apm kill-all --force              # Kill all processes without confirmation
+apm kill-all --current-dir        # Kill only processes from current directory
 apm restart <name>                # Restart a process (from current directory)
 apm restart <name> --all          # Restart any process
 apm clean                         # Clean all stopped processes (with confirmation)
@@ -476,11 +498,25 @@ const result = await mcp.call('query', {
   current_dir: false
 });
 
-// Search for specific errors across all processes
+// Search for specific errors across all processes (simple pattern matching)
 const errors = await mcp.call('query', {
   type: 'log_search',
   pattern: 'connection refused',
   limit: 20
+});
+
+// Full-text search with advanced query syntax (if search is enabled)
+const searchResults = await mcp.call('search', {
+  query: 'error AND (timeout OR refused) NOT retry',
+  level: 'error',
+  since: '2024-01-01T10:00:00Z',
+  limit: 50
+});
+
+// Fuzzy search to handle typos
+const fuzzyResults = await mcp.call('search', {
+  query: 'databse~ OR conection~',  // Finds "database" and "connection"
+  highlight: true
 });
 
 // Get filtered logs with level and time constraints
@@ -618,6 +654,43 @@ curl http://localhost:7337/api/agent/query-schema
 # Get API capabilities
 curl http://localhost:7337/api/agent/capabilities
 ```
+
+## Full-Text Search Best Practices
+
+When using APM's search functionality:
+
+### Query Syntax Tips
+- **Use quotes for exact phrases**: `"connection timeout"` finds the exact phrase
+- **Boolean operators must be uppercase**: `AND`, `OR`, `NOT`
+- **Parentheses for complex queries**: `(error OR warn) AND database`
+- **Field-specific search**: `level:error`, `process_id:backend-api`
+- **Fuzzy search for typos**: `databse~` or `conection~2` (allows 2 edits)
+- **Wildcards**: `time*` matches "timeout", "timestamp", etc.
+
+### Performance Optimization
+- **Use specific queries**: `"database connection error"` is faster than just `error`
+- **Add filters when possible**: Combine query with level, process_id, or time range
+- **Limit results appropriately**: Default 50 is usually sufficient
+- **Use pagination for large results**: Set offset for subsequent queries
+
+### When to Use Each Tool
+1. **Use `search` when**:
+   - Searching across multiple processes
+   - Need fuzzy matching or typo tolerance
+   - Complex boolean queries required
+   - Want relevance-ranked results
+   - Historical search beyond recent logs
+
+2. **Use `logs` when**:
+   - Filtering within a single known process
+   - Need real-time log streaming
+   - Simple text filtering is sufficient
+   - Want raw log output
+
+3. **Use `query` with `log_search` when**:
+   - Full-text search is not enabled
+   - Simple pattern matching is adequate
+   - Need to correlate with other metrics
 
 ## Enhanced Log Summarization
 
@@ -783,6 +856,36 @@ Current development priorities are tracked in GitHub Issues. Key areas include:
 - Log rotation and archival ([Issue #4](https://github.com/sunnya97/agent-process-manager/issues/4))
 - Enhanced AI Agent API ([Issue #1](https://github.com/sunnya97/agent-process-manager/issues/1))
 - Plugin system for custom patterns ([Issue #9](https://github.com/sunnya97/agent-process-manager/issues/9))
+
+## Changelog
+
+### v0.3.0 (2025-07-17)
+
+**Breaking Changes:**
+- Renamed all "stop" commands to "kill" to accurately reflect that they forcefully terminate processes
+- Added new `ProcessStatus::Killed` state to distinguish forced termination from natural exits
+- MCP tool renamed: `stop` → `kill`, `stop_multiple` → `kill_multiple`
+
+**New Features:**
+- **Instant Process Exit Detection**: Implemented file marker approach for immediate detection of process exits
+  - Process exits are now detected in <100ms instead of up to 30 seconds
+  - Exit codes are captured and stored via `/tmp/apm-{session}.exit-code` files
+  - Distinguishes between natural exits (Stopped) and forced termination (Killed)
+- **SIGCHLD-based Monitoring**: Added real-time process exit detection for PTY processes
+  - Direct child processes report exit immediately via SIGCHLD signal
+  - ProcessExitMonitor handles signal events and process reaping
+
+**Technical Improvements:**
+- Added `src/process/exit_monitor.rs` for centralized exit event handling
+- Modified tmux wrapper commands to create exit marker files on process completion
+- Updated monitoring loop to check file markers before expensive tmux operations
+- Reduced polling overhead by prioritizing file-based detection
+
+**Status Distinctions:**
+- `Stopped`: Process exited naturally (exit code available)
+- `Killed`: Process/session was forcefully terminated
+- `Failed`: Process exited with non-zero exit code
+
 ## Process Management with APM
 
 This project uses Agent Process Manager (APM) for all background processes.

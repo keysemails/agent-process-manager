@@ -5,6 +5,7 @@ use sysinfo::{System, Pid};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
 pub struct ProcessHealth {
@@ -13,17 +14,31 @@ pub struct ProcessHealth {
     pub is_alive: bool,
 }
 
+#[derive(Debug, Clone)]
+pub enum HealthEvent {
+    ProcessDied(ProcessId),
+}
+
 pub struct HealthMonitor {
     system: Arc<RwLock<System>>,
     health_data: Arc<RwLock<HashMap<ProcessId, ProcessHealth>>>,
+    event_sender: mpsc::Sender<HealthEvent>,
+    event_receiver: Arc<RwLock<mpsc::Receiver<HealthEvent>>>,
 }
 
 impl HealthMonitor {
     pub fn new() -> Self {
+        let (tx, rx) = mpsc::channel(100);
         Self {
             system: Arc::new(RwLock::new(System::new_all())),
             health_data: Arc::new(RwLock::new(HashMap::new())),
+            event_sender: tx,
+            event_receiver: Arc::new(RwLock::new(rx)),
         }
+    }
+    
+    pub fn get_event_receiver(&self) -> Arc<RwLock<mpsc::Receiver<HealthEvent>>> {
+        self.event_receiver.clone()
     }
 
     pub async fn update_health(&self, process_id: &ProcessId, pid: u32) {
@@ -36,6 +51,12 @@ impl HealthMonitor {
                 .with_memory(),
         );
 
+        // Check if process was previously alive
+        let was_alive = self.health_data.read().await
+            .get(process_id)
+            .map(|h| h.is_alive)
+            .unwrap_or(true);
+
         if let Some(process) = system.process(pid) {
             let health = ProcessHealth {
                 cpu_percent: process.cpu_usage(),
@@ -46,14 +67,18 @@ impl HealthMonitor {
             self.health_data.write().await.insert(process_id.clone(), health);
         } else {
             // Process not found - mark as not alive
-            self.health_data.write().await.insert(
-                process_id.clone(),
-                ProcessHealth {
-                    cpu_percent: 0.0,
-                    memory_mb: 0,
-                    is_alive: false,
-                }
-            );
+            let health = ProcessHealth {
+                cpu_percent: 0.0,
+                memory_mb: 0,
+                is_alive: false,
+            };
+            
+            self.health_data.write().await.insert(process_id.clone(), health);
+            
+            // If process just died, send event
+            if was_alive {
+                let _ = self.event_sender.send(HealthEvent::ProcessDied(process_id.clone())).await;
+            }
         }
     }
 

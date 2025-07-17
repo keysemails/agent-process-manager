@@ -17,7 +17,7 @@ async fn test_pty_master_access() {
     
     let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
     let (log_tx, _log_rx) = tokio::sync::mpsc::channel(100);
-    let manager = ProcessManager::new(log_storage.clone(), log_tx);
+    let manager = ProcessManager::new(log_storage.clone().unwrap(), log_tx);
     
     // Create a process with PTY
     let config = ProcessConfig {
@@ -55,7 +55,7 @@ async fn test_process_without_pty() {
     
     let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
     let (log_tx, _log_rx) = tokio::sync::mpsc::channel(100);
-    let manager = ProcessManager::new(log_storage, log_tx);
+    let manager = ProcessManager::new(log_storage, log_tx).unwrap();
     
     // Create a process without PTY
     let config = ProcessConfig {
@@ -91,7 +91,7 @@ async fn test_pty_resize() {
     
     let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
     let (log_tx, _log_rx) = tokio::sync::mpsc::channel(100);
-    let manager = ProcessManager::new(log_storage, log_tx);
+    let manager = ProcessManager::new(log_storage, log_tx).unwrap();
     
     // Create a long-running process with PTY
     let config = ProcessConfig {

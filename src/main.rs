@@ -93,21 +93,21 @@ enum Commands {
         force: bool,
     },
     
-    /// Stop a process
-    Stop {
+    /// Kill a process (terminate tmux session)
+    Kill {
         /// Process name or ID
         name: String,
-        /// Stop process from any directory
+        /// Kill process from any directory
         #[arg(long)]
         all: bool,
     },
     
-    /// Stop all processes
-    StopAll {
-        /// Only stop processes from current directory (by default stops all)
+    /// Kill all processes
+    KillAll {
+        /// Only kill processes from current directory (by default kills all)
         #[arg(long)]
         current_dir: bool,
-        /// Force stop without confirmation
+        /// Force kill without confirmation
         #[arg(short, long)]
         force: bool,
     },
@@ -238,13 +238,13 @@ async fn main() -> anyhow::Result<()> {
             init_default_logging();
             shutdown_cli(force).await
         }
-        Commands::Stop { name, all } => {
+        Commands::Kill { name, all } => {
             init_default_logging();
-            stop_process_cli(name, all).await
+            kill_process_cli(name, all).await
         }
-        Commands::StopAll { current_dir, force } => {
+        Commands::KillAll { current_dir, force } => {
             init_default_logging();
-            stop_all_processes_cli(current_dir, force).await
+            kill_all_processes_cli(current_dir, force).await
         }
         Commands::Clean { older_than, current_dir, keep_logs, force } => {
             init_default_logging();
@@ -357,7 +357,7 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
     let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(1000);
 
     // Initialize process manager
-    let process_manager = Arc::new(ProcessManager::new(log_storage.clone(), log_tx));
+    let process_manager = Arc::new(ProcessManager::new(log_storage.clone(), log_tx)?);
     
     // Initialize and recover orphaned sessions
     process_manager.initialize().await?;
@@ -379,9 +379,10 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
         let mcp_storage = log_storage.clone();
         let mcp_config = config.mcp.clone();
         let full_config = config.clone();
+        let mcp_search_engine = search_engine.clone();
         
         Some(tokio::spawn(async move {
-            if let Err(e) = start_mcp_server(mcp_manager, mcp_storage, mcp_config, full_config).await {
+            if let Err(e) = start_mcp_server(mcp_manager, mcp_storage, mcp_config, full_config, mcp_search_engine).await {
                 error!("MCP server error: {}", e);
             }
         }))
@@ -994,7 +995,7 @@ async fn shutdown_cli(force: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn stop_process_cli(name: String, show_all: bool) -> anyhow::Result<()> {
+async fn kill_process_cli(name: String, show_all: bool) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     
     // Load config to check access control settings
@@ -1061,16 +1062,16 @@ async fn stop_process_cli(name: String, show_all: bool) -> anyhow::Result<()> {
     
     let id = process["id"].as_str().unwrap();
     
-    // Now stop the process
+    // Now kill the process
     let response = client
         .delete(&format!("http://localhost:7337/api/processes/{}", id))
         .send()
         .await?;
 
     if response.status().is_success() {
-        println!("Stopped process '{}'", name);
+        println!("Killed process '{}'", name);
     } else {
-        eprintln!("Failed to stop process: {}", response.text().await?);
+        eprintln!("Failed to kill process: {}", response.text().await?);
     }
 
     Ok(())
@@ -1158,7 +1159,7 @@ async fn restart_process_cli(name: String, show_all: bool) -> anyhow::Result<()>
     Ok(())
 }
 
-async fn stop_all_processes_cli(current_dir_only: bool, force: bool) -> anyhow::Result<()> {
+async fn kill_all_processes_cli(current_dir_only: bool, force: bool) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     
     // Load config to check access control settings
@@ -1194,7 +1195,7 @@ async fn stop_all_processes_cli(current_dir_only: bool, force: bool) -> anyhow::
     let data: serde_json::Value = response.json().await?;
     
     // Filter processes
-    let mut processes_to_stop = Vec::new();
+    let mut processes_to_kill = Vec::new();
     if let Some(processes) = data["data"].as_array() {
         for process in processes {
             // Skip if already stopped
@@ -1214,14 +1215,14 @@ async fn stop_all_processes_cli(current_dir_only: bool, force: bool) -> anyhow::
                 }
             }
             
-            processes_to_stop.push((
+            processes_to_kill.push((
                 process["id"].as_str().unwrap_or("").to_string(),
                 process["name"].as_str().unwrap_or("").to_string(),
             ));
         }
     }
     
-    if processes_to_stop.is_empty() {
+    if processes_to_kill.is_empty() {
         if current_dir_only {
             println!("No running processes found in current directory");
         } else {
@@ -1230,15 +1231,15 @@ async fn stop_all_processes_cli(current_dir_only: bool, force: bool) -> anyhow::
         return Ok(());
     }
     
-    // Show what will be stopped
-    println!("Will stop {} processes:", processes_to_stop.len());
-    for (_, name) in &processes_to_stop {
+    // Show what will be killed
+    println!("Will kill {} processes:", processes_to_kill.len());
+    for (_, name) in &processes_to_kill {
         println!("  - {}", name);
     }
     
     // Confirm unless forced
     if !force {
-        print!("\nAre you sure you want to stop all these processes? (y/N): ");
+        print!("\nAre you sure you want to kill all these processes? (y/N): ");
         use std::io::{self, Write};
         io::stdout().flush()?;
         
@@ -1251,26 +1252,26 @@ async fn stop_all_processes_cli(current_dir_only: bool, force: bool) -> anyhow::
         }
     }
     
-    // Stop all processes
-    let mut stopped = 0;
+    // Kill all processes
+    let mut killed = 0;
     let mut failed = 0;
     
-    for (id, name) in processes_to_stop {
+    for (id, name) in processes_to_kill {
         let response = client
             .delete(&format!("http://localhost:7337/api/processes/{}", id))
             .send()
             .await?;
             
         if response.status().is_success() {
-            println!("Stopped: {}", name);
-            stopped += 1;
+            println!("Killed: {}", name);
+            killed += 1;
         } else {
-            eprintln!("Failed to stop {}: {}", name, response.text().await?);
+            eprintln!("Failed to kill {}: {}", name, response.text().await?);
             failed += 1;
         }
     }
     
-    println!("\nStopped {} processes, {} failed", stopped, failed);
+    println!("\nKilled {} processes, {} failed", killed, failed);
     
     Ok(())
 }
@@ -1434,7 +1435,6 @@ async fn setup_claude_local(yes: bool, dry_run: bool) -> anyhow::Result<()> {
     use dialoguer::{Confirm, theme::ColorfulTheme};
     use std::path::Path;
     use tokio::fs;
-    use tokio::io::AsyncWriteExt;
     
     println!("{}", "🤖 APM Setup for Claude Code - Local Project".bright_blue());
     println!("\nThis will configure Claude to use APM for long-running processes in this project.\n");
@@ -1583,7 +1583,7 @@ See: https://github.com/sunnya97/agent-process-manager/blob/main/APM_FOR_AI_ASSI
     
     if claude_exists {
         // Check if APM section already exists
-        let content = fs::read_to_string("CLAUDE.md").await?;
+        let mut content = fs::read_to_string("CLAUDE.md").await?;
         if content.contains("Process Management with APM") {
             println!("✓ CLAUDE.md already contains APM configuration");
             if !yes {
@@ -1596,16 +1596,41 @@ See: https://github.com/sunnya97/agent-process-manager/blob/main/APM_FOR_AI_ASSI
                     return Ok(());
                 }
             }
+            
+            // Replace the existing APM section instead of appending
+            // Find the start of the APM section
+            if let Some(start_pos) = content.find("## Process Management with APM") {
+                // Find the end of the APM section (next ## heading or end of file)
+                let section_start = &content[start_pos..];
+                let end_pos = section_start[3..] // Skip the current "## "
+                    .find("\n## ")
+                    .map(|pos| start_pos + 3 + pos)
+                    .unwrap_or(content.len());
+                
+                // Replace the section, preserving any trailing content
+                let before_section = &content[..start_pos];
+                let after_section = if end_pos < content.len() {
+                    &content[end_pos..]
+                } else {
+                    ""
+                };
+                
+                // Reconstruct the content with the new APM section
+                let new_content = format!("{}{}{}", before_section, apm_section, after_section);
+                fs::write("CLAUDE.md", new_content).await?;
+                println!("✓ Updated APM configuration in CLAUDE.md");
+            } else {
+                // Somehow the check passed but we can't find it, append as fallback
+                content.push_str(&apm_section);
+                fs::write("CLAUDE.md", content).await?;
+                println!("✓ Added APM configuration to CLAUDE.md");
+            }
+        } else {
+            // No APM section exists, append it
+            content.push_str(&apm_section);
+            fs::write("CLAUDE.md", content).await?;
+            println!("✓ Added APM configuration to CLAUDE.md");
         }
-        
-        // Append to existing file
-        let mut file = tokio::fs::OpenOptions::new()
-            .append(true)
-            .open("CLAUDE.md")
-            .await?;
-        
-        file.write_all(apm_section.as_bytes()).await?;
-        println!("✓ Updated CLAUDE.md with APM configuration");
     } else {
         // Create new file
         let full_content = format!(r#"# CLAUDE.md - Project Instructions
@@ -1694,7 +1719,6 @@ async fn setup_claude_global(yes: bool, dry_run: bool) -> anyhow::Result<()> {
     use std::path::PathBuf;
     use tokio::fs;
     use tokio::process::Command;
-    use tokio::io::AsyncWriteExt;
     
     println!("{}", "🤖 APM Setup for Claude Code - Global Configuration".bright_blue());
     println!("\nThis will configure Claude to use APM for ALL projects on your system.\n");
@@ -1846,16 +1870,52 @@ When in doubt, use APM! It's better to spawn a short process unnecessarily than 
 "#;
     
     if claude_md_path.exists() {
-        let content = fs::read_to_string(&claude_md_path).await?;
-        if !content.contains("Process Management with APM") {
-            let mut file = tokio::fs::OpenOptions::new()
-                .append(true)
-                .open(&claude_md_path)
-                .await?;
-            file.write_all(apm_global_content.as_bytes()).await?;
-            println!("✓ Updated ~/.config/claude/CLAUDE.md");
+        let mut content = fs::read_to_string(&claude_md_path).await?;
+        if content.contains("Process Management with APM") {
+            println!("✓ ~/.config/claude/CLAUDE.md already contains APM configuration");
+            if !yes {
+                let update = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Update the existing global APM configuration?")
+                    .default(false)
+                    .interact()?;
+                if !update {
+                    println!("Keeping existing configuration.");
+                    return Ok(());
+                }
+            }
+            
+            // Replace the existing APM section instead of appending
+            if let Some(start_pos) = content.find("## Process Management with APM") {
+                // Find the end of the APM section (next ## heading or end of file)
+                let section_start = &content[start_pos..];
+                let end_pos = section_start[3..] // Skip the current "## "
+                    .find("\n## ")
+                    .map(|pos| start_pos + 3 + pos)
+                    .unwrap_or(content.len());
+                
+                // Replace the section, preserving any trailing content
+                let before_section = &content[..start_pos];
+                let after_section = if end_pos < content.len() {
+                    &content[end_pos..]
+                } else {
+                    ""
+                };
+                
+                // Reconstruct the content with the new APM section
+                let new_content = format!("{}{}{}", before_section, apm_global_content, after_section);
+                fs::write(&claude_md_path, new_content).await?;
+                println!("✓ Updated APM configuration in ~/.config/claude/CLAUDE.md");
+            } else {
+                // Somehow the check passed but we can't find it, append as fallback
+                content.push_str(apm_global_content);
+                fs::write(&claude_md_path, content).await?;
+                println!("✓ Added APM configuration to ~/.config/claude/CLAUDE.md");
+            }
         } else {
-            println!("✓ ~/.config/claude/CLAUDE.md already configured");
+            // No APM section exists, append it
+            content.push_str(apm_global_content);
+            fs::write(&claude_md_path, content).await?;
+            println!("✓ Added APM configuration to ~/.config/claude/CLAUDE.md");
         }
     } else {
         let full_content = format!("# Global Claude Instructions{}", apm_global_content);

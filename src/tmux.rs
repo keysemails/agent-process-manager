@@ -180,18 +180,21 @@ impl TmuxManager {
             // Create temporary script file
             let script_path = create_temp_script(session_name, command, args, env)?;
             
-            // Return script execution command with cleanup
-            format!("{} ; echo 'Process exited with code '$? ; rm -f {} ; read -p 'Press enter to close session'", 
-                shell_quote(&script_path.to_string_lossy()), 
+            // Return script execution command with cleanup and exit markers
+            format!("{} ; EXIT_CODE=$? ; echo \"Process exited with code $EXIT_CODE\" ; echo $EXIT_CODE > /tmp/apm-{}.exit-code ; touch /tmp/apm-{}.exited ; rm -f {} ; read -p 'Press enter to close session'", 
+                shell_quote(&script_path.to_string_lossy()),
+                session_name,
+                session_name,
                 shell_quote(&script_path.to_string_lossy()))
         } else {
             // Use traditional approach for simple commands
             if args.is_empty() {
-                format!("{} ; echo 'Process exited with code '$? ; read -p 'Press enter to close session'", shell_quote(command))
+                format!("{} ; EXIT_CODE=$? ; echo \"Process exited with code $EXIT_CODE\" ; echo $EXIT_CODE > /tmp/apm-{}.exit-code ; touch /tmp/apm-{}.exited ; read -p 'Press enter to close session'", 
+                    shell_quote(command), session_name, session_name)
             } else {
                 let quoted_args: Vec<String> = args.iter().map(|arg| shell_quote(arg)).collect();
-                format!("{} {} ; echo 'Process exited with code '$? ; read -p 'Press enter to close session'", 
-                    shell_quote(command), quoted_args.join(" "))
+                format!("{} {} ; EXIT_CODE=$? ; echo \"Process exited with code $EXIT_CODE\" ; echo $EXIT_CODE > /tmp/apm-{}.exit-code ; touch /tmp/apm-{}.exited ; read -p 'Press enter to close session'", 
+                    shell_quote(command), quoted_args.join(" "), session_name, session_name)
             }
         };
         

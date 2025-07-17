@@ -86,13 +86,13 @@ pub async fn get_process(
     }
 }
 
-pub async fn stop_process(
+pub async fn kill_process(
     Extension(process_manager): Extension<Arc<ProcessManager>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let process_id = ProcessId(id.parse().unwrap());
     
-    match process_manager.stop_process(&process_id).await {
+    match process_manager.kill_process(&process_id).await {
         Ok(()) => (
             StatusCode::OK,
             Json(ApiResponse::success(serde_json::json!({

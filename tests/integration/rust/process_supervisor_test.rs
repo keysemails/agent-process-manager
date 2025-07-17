@@ -14,7 +14,7 @@ async fn create_test_manager() -> (ProcessManager, mpsc::Receiver<(ProcessId, St
     let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
     let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
     let (tx, rx) = mpsc::channel(100);
-    let manager = ProcessManager::new(log_storage, tx);
+    let manager = ProcessManager::new(log_storage, tx).unwrap();
     
     // Initialize the manager to ensure database schema is ready
     // Note: initialize() recovers orphaned tmux sessions, which we don't want in tests
@@ -474,4 +474,44 @@ async fn test_concurrent_process_spawning() {
     // Verify all processes were created
     let processes = manager.list_processes().await.unwrap();
     assert_eq!(processes.len(), 5);
+}
+
+#[tokio::test]
+async fn test_process_exit_detection_in_tmux() {
+    let (manager, _rx, _temp_dir) = create_test_manager().await;
+    
+    // Spawn a process that exits after 2 seconds
+    let config = ProcessConfig {
+        name: "test-exit".to_string(),
+        command: "bash".to_string(),
+        args: vec![
+            "-c".to_string(),
+            "echo 'Starting'; sleep 2; echo 'Exiting'; exit 0".to_string()
+        ],
+        cwd: None,
+        env: HashMap::new(),
+        tags: vec![],
+        pty: false,
+        use_tmux: true,
+        restart_policy: RestartPolicy::default(),
+        resources: ResourceLimits::default(),
+        access_group: None,
+    };
+    
+    let process = manager.spawn_process(config).await.unwrap();
+    assert_eq!(process.status, ProcessStatus::Running);
+    
+    // Wait for process to start
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    
+    // Verify it's running
+    let status = manager.get_process(&process.id).await.unwrap();
+    assert_eq!(status.status, ProcessStatus::Running);
+    
+    // Wait for process to exit and monitoring to detect it
+    tokio::time::sleep(tokio::time::Duration::from_secs(6)).await;
+    
+    // Check that status is now Stopped
+    let status = manager.get_process(&process.id).await.unwrap();
+    assert_eq!(status.status, ProcessStatus::Stopped);
 }

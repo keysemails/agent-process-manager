@@ -2,6 +2,7 @@
 
 use super::{ProcessId, ProcessInfo, ProcessStatus};
 use super::health::HealthMonitor;
+use super::exit_monitor::{ProcessExitMonitor, ProcessExitEvent};
 use crate::{ApmError, Result, tmux::TmuxManager, logs::LogStorage};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
@@ -78,14 +79,16 @@ pub struct ProcessManager {
     storage: Arc<LogStorage>,
     log_sender: tokio::sync::mpsc::Sender<(ProcessId, String)>,
     health_monitor: Arc<HealthMonitor>,
+    exit_monitor: Arc<ProcessExitMonitor>,
 }
 
 impl ProcessManager {
     pub fn new(
         storage: Arc<LogStorage>,
         log_sender: tokio::sync::mpsc::Sender<(ProcessId, String)>
-    ) -> Self {
+    ) -> Result<Self> {
         let health_monitor = Arc::new(HealthMonitor::new());
+        let exit_monitor = Arc::new(ProcessExitMonitor::new()?);
         
         // Start the health monitoring background task
         let monitor = health_monitor.clone();
@@ -93,11 +96,73 @@ impl ProcessManager {
             monitor.start_monitoring().await;
         });
         
-        Self {
+        // Start the exit monitoring
+        let exit_mon = exit_monitor.clone();
+        tokio::spawn(async move {
+            if let Err(e) = exit_mon.start_monitoring().await {
+                error!("Failed to start exit monitoring: {}", e);
+            }
+        });
+
+        // Start health event handler (legacy - will be replaced by exit monitor)
+        let event_receiver = health_monitor.get_event_receiver();
+        let legacy_storage = storage.clone();
+        tokio::spawn(async move {
+            let mut rx = event_receiver.write().await;
+            while let Some(event) = rx.recv().await {
+                match event {
+                    super::health::HealthEvent::ProcessDied(process_id) => {
+                        info!("Health monitor detected process {} has died", process_id);
+                        if let Err(e) = legacy_storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await {
+                            error!("Failed to update process status for dead process {}: {}", process_id, e);
+                        }
+                    }
+                }
+            }
+        });
+
+        // Start exit event handler
+        let exit_event_receiver = exit_monitor.get_event_receiver();
+        let exit_storage = storage.clone();
+        tokio::spawn(async move {
+            let mut rx = exit_event_receiver.lock().await;
+            while let Some(event) = rx.recv().await {
+                match event {
+                    ProcessExitEvent::ProcessExited { process_id, pid, exit_code } => {
+                        info!("Process {} (PID {}) exited with code {}", process_id, pid, exit_code);
+                        let final_status = if exit_code == 0 { ProcessStatus::Stopped } else { ProcessStatus::Failed };
+                        if let Err(e) = exit_storage.update_process_status(&process_id, final_status, None).await {
+                            error!("Failed to update process status for exited process {}: {}", process_id, e);
+                        }
+                    }
+                    ProcessExitEvent::ProcessKilled { process_id, pid, signal } => {
+                        info!("Process {} (PID {}) killed by signal {}", process_id, pid, signal);
+                        if let Err(e) = exit_storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await {
+                            error!("Failed to update process status for killed process {}: {}", process_id, e);
+                        }
+                    }
+                    ProcessExitEvent::TmuxSessionEnded { process_id, session_name } => {
+                        info!("Tmux session {} for process {} ended", session_name, process_id);
+                        if let Err(e) = exit_storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await {
+                            error!("Failed to update process status for tmux session end {}: {}", process_id, e);
+                        }
+                    }
+                    ProcessExitEvent::PtyProcessEnded { process_id, pid } => {
+                        info!("PTY process {} (PID {}) ended", process_id, pid);
+                        if let Err(e) = exit_storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await {
+                            error!("Failed to update process status for PTY process end {}: {}", process_id, e);
+                        }
+                    }
+                }
+            }
+        });
+        
+        Ok(Self {
             storage,
             log_sender,
             health_monitor,
-        }
+            exit_monitor,
+        })
     }
     
     pub async fn initialize(&self) -> Result<()> {
@@ -109,6 +174,42 @@ impl ProcessManager {
                 info!("  - Recovered process {}", id);
             }
         }
+        
+        // Start periodic status reconciliation
+        let storage = self.storage.clone();
+        let health_monitor = self.health_monitor.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                
+                // Get all running processes
+                if let Ok(processes) = storage.list_processes(Some(ProcessStatus::Running)).await {
+                    for process in processes {
+                        // Skip if no PID
+                        if let Some(pid) = process.pid {
+                            // Check health status
+                            if let Some(health) = health_monitor.get_health(&process.id).await {
+                                if !health.is_alive {
+                                    info!("Reconciliation: Process {} (PID {}) is dead but marked as running", process.id, pid);
+                                    let _ = storage.update_process_status(&process.id, ProcessStatus::Stopped, None).await;
+                                }
+                            }
+                        }
+                        
+                        // Check tmux session if applicable
+                        if let Some(tmux_session) = &process.tmux_session {
+                            use crate::tmux::TmuxManager;
+                            if !TmuxManager::session_exists(tmux_session) {
+                                info!("Reconciliation: Tmux session {} for process {} no longer exists", tmux_session, process.id);
+                                let _ = storage.update_process_status(&process.id, ProcessStatus::Stopped, None).await;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        
         Ok(())
     }
     
@@ -118,6 +219,7 @@ impl ProcessManager {
             storage: self.storage.clone(),
             log_sender: self.log_sender.clone(),
             health_monitor: self.health_monitor.clone(),
+            exit_monitor: self.exit_monitor.clone(),
         }
     }
 
@@ -204,6 +306,15 @@ impl ProcessManager {
                 // Update health metrics every 2 seconds
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 health_monitor.update_health(&process_id, pid).await;
+                
+                // Check if process is still alive
+                if let Some(health) = health_monitor.get_health(&process_id).await {
+                    if !health.is_alive {
+                        info!("Process {} (PID {}) is no longer alive, stopping monitoring", process_id, pid);
+                        // The health monitor will have already sent the ProcessDied event
+                        break;
+                    }
+                }
             }
         });
     }
@@ -235,6 +346,15 @@ impl ProcessManager {
         // Get the PID of the process in tmux
         let pid = TmuxManager::get_session_pid(&session_name)
             .ok();
+        
+        // Register with exit monitor if we have a PID
+        if let Some(pid_val) = pid {
+            self.exit_monitor.register_tmux_process(
+                id.clone(),
+                pid_val,
+                session_name.clone()
+            ).await;
+        }
         
         // Start log monitoring
         let log_sender = self.log_sender.clone();
@@ -365,6 +485,11 @@ impl ProcessManager {
             .map_err(|e| ApmError::Process(format!("Failed to spawn process: {}", e)))?;
 
         let pid = child.process_id();
+        
+        // Register with exit monitor
+        if let Some(pid_val) = pid {
+            self.exit_monitor.register_pty_process(id.clone(), pid_val).await;
+        }
 
         Ok(Process {
             id,
@@ -406,15 +531,66 @@ impl ProcessManager {
                     tokio::time::Duration::from_secs(5)
                 };
                 
+                let mut process_exit_detected = false;
+                
                 loop {
+                    // First, check for file markers (instant detection)
+                    let exit_marker_path = format!("/tmp/apm-{}.exited", session);
+                    if std::path::Path::new(&exit_marker_path).exists() && !process_exit_detected {
+                        info!("Exit marker detected for process {} in tmux session {}", process_id, session);
+                        process_exit_detected = true;
+                        
+                        // Try to read exit code
+                        let exit_code_path = format!("/tmp/apm-{}.exit-code", session);
+                        let exit_code = std::fs::read_to_string(&exit_code_path)
+                            .ok()
+                            .and_then(|s| s.trim().parse::<i32>().ok());
+                        
+                        if let Some(code) = exit_code {
+                            info!("Process {} exited with code {}", process_id, code);
+                        }
+                        
+                        // Update process status to stopped (natural exit)
+                        let _ = storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await;
+                        
+                        // Clean up marker files
+                        let _ = std::fs::remove_file(&exit_marker_path);
+                        let _ = std::fs::remove_file(&exit_code_path);
+                        
+                        // Continue monitoring until session is actually closed
+                    }
+                    
+                    // Sleep before next check
                     tokio::time::sleep(check_interval).await;
                     
                     // Check if session still exists
                     if !TmuxManager::session_exists(&session) {
                         info!("Tmux session {} for process {} has ended", session, process_id);
-                        // Update process status in database
-                        let _ = storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await;
+                        // Update process status - if exit marker existed, it's Stopped, otherwise Killed
+                        let final_status = if process_exit_detected {
+                            ProcessStatus::Stopped
+                        } else {
+                            ProcessStatus::Killed
+                        };
+                        let _ = storage.update_process_status(&process_id, final_status, None).await;
                         break;
+                    }
+                    
+                    // Fallback: check tmux pane content if no marker found
+                    if !process_exit_detected {
+                        use crate::tmux::TmuxManager;
+                        if let Ok(pane_content) = TmuxManager::capture_pane(&session, false) {
+                            // Check for common exit patterns
+                            if pane_content.contains("Process exited with code") ||
+                               pane_content.contains("Press enter to close session") ||
+                               pane_content.ends_with("exit\n") {
+                                info!("Process {} has exited within tmux session {} (detected via pane content)", process_id, session);
+                                process_exit_detected = true;
+                                // Update process status to stopped
+                                let _ = storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await;
+                                // Continue monitoring until session is actually closed
+                            }
+                        }
                     }
                 }
             });
@@ -540,7 +716,7 @@ impl ProcessManager {
         Ok(infos)
     }
 
-    pub async fn stop_process(&self, id: &ProcessId) -> Result<()> {
+    pub async fn kill_process(&self, id: &ProcessId) -> Result<()> {
         let process_record = self.storage.get_process(id).await?
             .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
 
@@ -565,6 +741,11 @@ impl ProcessManager {
         // Remove from health monitor
         self.health_monitor.remove_process(id).await;
         
+        // Remove from exit monitor if we have a PID
+        if let Some(pid) = process_record.pid {
+            self.exit_monitor.unregister_process(pid).await;
+        }
+        
         Ok(())
     }
 
@@ -578,8 +759,8 @@ impl ProcessManager {
         let old_restart_count = process_record.restart_count;
         let config = process_record.config.clone();
         
-        // Stop the existing process
-        self.stop_process(id).await?;
+        // Kill the existing process
+        self.kill_process(id).await?;
         
         // Increment restart count in database
         self.storage.increment_restart_count(id).await?;

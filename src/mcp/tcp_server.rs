@@ -19,13 +19,14 @@ pub async fn start_mcp_server(
     log_storage: Arc<LogStorage>,
     mcp_config: McpConfig,
     full_config: crate::config::Config,
+    search_engine: Option<Arc<crate::logs::LogSearchEngine>>,
 ) -> Result<()> {
     match mcp_config.transport {
         McpTransport::Tcp => {
-            start_tcp_server(process_manager, log_storage, &mcp_config, full_config).await
+            start_tcp_server(process_manager, log_storage, &mcp_config, full_config, search_engine).await
         }
         McpTransport::UnixSocket => {
-            start_unix_socket_server(process_manager, log_storage, &mcp_config, full_config).await
+            start_unix_socket_server(process_manager, log_storage, &mcp_config, full_config, search_engine).await
         }
     }
 }
@@ -35,6 +36,7 @@ async fn start_tcp_server(
     log_storage: Arc<LogStorage>,
     mcp_config: &McpConfig,
     full_config: crate::config::Config,
+    search_engine: Option<Arc<crate::logs::LogSearchEngine>>,
 ) -> Result<()> {
     let addr = format!("{}:{}", mcp_config.tcp_host, mcp_config.tcp_port);
     let listener = TcpListener::bind(&addr).await?;
@@ -48,6 +50,7 @@ async fn start_tcp_server(
                     process_manager: process_manager.clone(),
                     log_storage: log_storage.clone(),
                     config: full_config.clone(),
+                    search_engine: search_engine.clone(),
                 };
                 
                 tokio::spawn(async move {
@@ -70,6 +73,7 @@ async fn start_unix_socket_server(
     log_storage: Arc<LogStorage>,
     mcp_config: &McpConfig,
     full_config: crate::config::Config,
+    search_engine: Option<Arc<crate::logs::LogSearchEngine>>,
 ) -> Result<()> {
     // Remove existing socket file if it exists
     if std::path::Path::new(&mcp_config.unix_socket).exists() {
@@ -87,6 +91,7 @@ async fn start_unix_socket_server(
                     process_manager: process_manager.clone(),
                     log_storage: log_storage.clone(),
                     config: full_config.clone(),
+                    search_engine: search_engine.clone(),
                 };
                 
                 tokio::spawn(async move {

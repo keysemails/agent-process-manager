@@ -26,7 +26,7 @@ async fn setup_test_app() -> (axum::Router, Arc<ProcessManager>, Arc<LogStorage>
             .await
             .unwrap()
     );
-    let process_manager = Arc::new(ProcessManager::new(log_storage.clone(), tx));
+    let process_manager = Arc::new(ProcessManager::new(log_storage.clone(), tx).unwrap());
     
     let app = api::create_router(process_manager.clone(), log_storage.clone(), None);
     

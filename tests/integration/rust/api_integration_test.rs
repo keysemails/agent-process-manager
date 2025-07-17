@@ -18,7 +18,7 @@ async fn setup_test_app() -> (axum::Router, Arc<ProcessManager>, Arc<LogStorage>
     let db_url = format!("sqlite:{}", db_path.display());
     
     let storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
-    let manager = Arc::new(ProcessManager::new(storage.clone(), tx));
+    let manager = Arc::new(ProcessManager::new(storage.clone().unwrap(), tx));
     
     let app = create_router(manager.clone(), storage.clone(), None);
     

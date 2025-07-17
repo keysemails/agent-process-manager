@@ -19,7 +19,7 @@ async fn setup_test_env() -> (Arc<ProcessManager>, Arc<LogStorage>, TempDir) {
     let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
     
     let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
-    let process_manager = Arc::new(ProcessManager::new(log_storage.clone(), tx.clone()));
+    let process_manager = Arc::new(ProcessManager::new(log_storage.clone(), tx.clone()).unwrap());
     
     // Start log storage task
     let storage_clone = log_storage.clone();

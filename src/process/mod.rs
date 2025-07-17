@@ -2,9 +2,11 @@
 
 pub mod supervisor;
 pub mod health;
+pub mod exit_monitor;
 
 pub use supervisor::{ProcessManager, ProcessConfig, Process};
 pub use health::HealthMonitor;
+pub use exit_monitor::{ProcessExitMonitor, ProcessExitEvent};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -51,7 +53,8 @@ pub enum ProcessStatus {
     Starting,
     Running,
     Stopping,
-    Stopped,
+    Stopped,  // Process exited naturally (with exit code)
+    Killed,   // Process/session was forcefully terminated
     Failed,
     Restarting,
 }

@@ -35,6 +35,7 @@ pub(crate) struct McpServerHandler {
     pub process_manager: Arc<ProcessManager>,
     pub log_storage: Arc<LogStorage>,
     pub config: crate::config::Config,
+    pub search_engine: Option<Arc<crate::logs::LogSearchEngine>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,7 +64,7 @@ fn default_limit() -> usize {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct StopArgs {
+struct KillArgs {
     process_id: String,
 }
 
@@ -103,7 +104,7 @@ struct QueryArgs {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct StopMultipleArgs {
+struct KillMultipleArgs {
     #[serde(default)]
     current_dir: bool,
     #[serde(default)]
@@ -122,16 +123,41 @@ struct CleanArgs {
     current_dir: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct SearchArgs {
+    query: String,
+    #[serde(default)]
+    process_id: Option<String>,
+    #[serde(default)]
+    level: Option<String>,
+    #[serde(default)]
+    since: Option<String>,
+    #[serde(default)]
+    until: Option<String>,
+    #[serde(default = "default_search_limit")]
+    limit: usize,
+    #[serde(default)]
+    offset: Option<usize>,
+    #[serde(default)]
+    highlight: Option<bool>,
+}
+
+fn default_search_limit() -> usize {
+    50
+}
+
 impl McpServer {
     pub async fn new(
         process_manager: Arc<ProcessManager>,
         log_storage: Arc<LogStorage>,
         config: crate::config::Config,
+        search_engine: Option<Arc<crate::logs::LogSearchEngine>>,
     ) -> Result<Self> {
         let handler = McpServerHandler {
             process_manager,
             log_storage,
             config,
+            search_engine,
         };
         Ok(Self { handler })
     }
@@ -372,8 +398,8 @@ impl McpServerHandler {
         }
     }
 
-    async fn handle_stop(&self, args: StopArgs) -> CallToolResult {
-        debug!("MCP stop tool called: {:?}", args);
+    async fn handle_kill(&self, args: KillArgs) -> CallToolResult {
+        debug!("MCP kill tool called: {:?}", args);
 
         let process_id = match args.process_id.parse() {
             Ok(id) => ProcessId(id),
@@ -404,18 +430,18 @@ impl McpServerHandler {
                     return Self::create_error_result(format!("Access denied: process '{}' is not accessible from this directory", process_id));
                 }
                 
-                // Stop the process
-                match self.process_manager.stop_process(&process_id).await {
+                // Kill the process
+                match self.process_manager.kill_process(&process_id).await {
                     Ok(()) => {
                         let response = json!({
                             "success": true,
-                            "message": format!("Process '{}' stopped successfully", process_id)
+                            "message": format!("Process '{}' killed successfully", process_id)
                         });
                         Self::create_success_result(response.to_string())
                     }
                     Err(e) => {
-                        error!("Failed to stop process: {}", e);
-                        Self::create_error_result(format!("Failed to stop process: {}", e))
+                        error!("Failed to kill process: {}", e);
+                        Self::create_error_result(format!("Failed to kill process: {}", e))
                     }
                 }
             }
@@ -482,8 +508,8 @@ impl McpServerHandler {
         }
     }
 
-    async fn handle_stop_multiple(&self, args: StopMultipleArgs) -> CallToolResult {
-        debug!("MCP stop_multiple tool called: {:?}", args);
+    async fn handle_kill_multiple(&self, args: KillMultipleArgs) -> CallToolResult {
+        debug!("MCP kill_multiple tool called: {:?}", args);
 
         // Get the current working directory for access control
         let access_group = match std::env::current_dir() {
@@ -503,7 +529,7 @@ impl McpServerHandler {
         };
 
         // Filter processes based on criteria
-        let mut processes_to_stop = Vec::new();
+        let mut processes_to_kill = Vec::new();
         
         for process in all_processes {
             // Apply name filter if provided
@@ -525,26 +551,26 @@ impl McpServerHandler {
                 }
             }
             
-            processes_to_stop.push((process.id.clone(), process.name.clone()));
+            processes_to_kill.push((process.id.clone(), process.name.clone()));
         }
 
-        if processes_to_stop.is_empty() {
+        if processes_to_kill.is_empty() {
             return Self::create_success_result(json!({
                 "success": true,
-                "stopped": 0,
+                "killed": 0,
                 "failed": 0,
                 "message": "No processes matched the criteria"
             }).to_string());
         }
 
-        // Stop all matching processes
-        let mut stopped = 0;
+        // Kill all matching processes
+        let mut killed = 0;
         let mut failed = 0;
         let mut errors = Vec::new();
 
-        for (id, name) in processes_to_stop {
-            match self.process_manager.stop_process(&id).await {
-                Ok(()) => stopped += 1,
+        for (id, name) in processes_to_kill {
+            match self.process_manager.kill_process(&id).await {
+                Ok(()) => killed += 1,
                 Err(e) => {
                     failed += 1;
                     errors.push(json!({
@@ -557,10 +583,10 @@ impl McpServerHandler {
 
         let response = json!({
             "success": failed == 0,
-            "stopped": stopped,
+            "killed": killed,
             "failed": failed,
             "errors": errors,
-            "message": format!("Stopped {} processes, {} failed", stopped, failed)
+            "message": format!("Killed {} processes, {} failed", killed, failed)
         });
         
         Self::create_success_result(response.to_string())
@@ -601,6 +627,108 @@ impl McpServerHandler {
             Err(e) => {
                 error!("Failed to clean processes: {}", e);
                 Self::create_error_result(format!("Failed to clean processes: {}", e))
+            }
+        }
+    }
+
+    async fn handle_search(&self, args: SearchArgs) -> CallToolResult {
+        debug!("MCP search tool called: {:?}", args);
+
+        // Check if search engine is available
+        let search_engine = match &self.search_engine {
+            Some(engine) => engine,
+            None => {
+                return Self::create_error_result(
+                    "Full-text search is not enabled. Please enable search in the configuration.\n\n\
+                    Alternatives:\n\
+                    • Use 'logs' tool with search parameter for basic filtering within a single process\n\
+                    • Use 'query' tool with type='log_search' for simple pattern matching across processes\n\
+                    • Ask the user to enable search by setting 'search.enabled: true' in the config".to_string()
+                );
+            }
+        };
+
+        // Parse process ID if provided
+        let process_id = if let Some(pid_str) = args.process_id {
+            match pid_str.parse() {
+                Ok(id) => Some(ProcessId(id)),
+                Err(_) => {
+                    return Self::create_error_result("Invalid process ID format".to_string());
+                }
+            }
+        } else {
+            None
+        };
+
+        // Parse log level if provided
+        let level = args.level.as_ref().and_then(|l| match l.to_lowercase().as_str() {
+            "debug" => Some(LogLevel::Debug),
+            "info" => Some(LogLevel::Info),
+            "warn" => Some(LogLevel::Warn),
+            "error" => Some(LogLevel::Error),
+            _ => None,
+        });
+
+        // Parse timestamps if provided
+        let since = args.since.as_ref().and_then(|s| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .ok()
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+        });
+
+        let until = args.until.as_ref().and_then(|s| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .ok()
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+        });
+
+        // Create search query
+        let search_query = crate::logs::SearchQuery {
+            query: args.query,
+            process_id,
+            level,
+            since,
+            until,
+            patterns: None,
+            limit: Some(args.limit),
+            offset: args.offset,
+            highlight: args.highlight,
+        };
+
+        // Execute search
+        match search_engine.search(search_query).await {
+            Ok(response) => {
+                // Convert search results to MCP format
+                let results: Vec<Value> = response.results
+                    .into_iter()
+                    .map(|result| {
+                        json!({
+                            "log_id": result.log_id,
+                            "score": result.score,
+                            "process_id": result.process_id.to_string(),
+                            "timestamp": result.timestamp,
+                            "level": format!("{:?}", result.level),
+                            "line": result.raw_line,
+                            "clean_line": result.clean_line,
+                            "snippet": result.snippet,
+                            "patterns": result.patterns
+                        })
+                    })
+                    .collect();
+
+                let mcp_response = json!({
+                    "success": true,
+                    "results": results,
+                    "total_hits": response.total_hits,
+                    "query_time_ms": response.query_time_ms,
+                    "query": response.query
+                });
+
+                Self::create_success_result(serde_json::to_string_pretty(&mcp_response).unwrap_or_else(|_| "{}".to_string()))
+            }
+            Err(e) => {
+                error!("Search failed: {}", e);
+                Self::create_error_result(format!("Search failed: {}", e))
             }
         }
     }
@@ -1061,7 +1189,38 @@ impl ServerHandler for McpServerHandler {
                 name: "agent-process-manager".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
             },
-            instructions: Some("Agent Process Manager MCP server for managing background processes".into()),
+            instructions: Some(r#"Agent Process Manager MCP server for managing background processes.
+
+When searching for logs, you have three options:
+
+1. **logs** tool - For basic filtering within a SINGLE known process:
+   - Use when you have a specific process_id
+   - Good for recent logs, simple text filtering
+   - Real-time streaming available
+   - Limited to 1000 logs per query
+
+2. **search** tool - For powerful full-text search across ALL processes:
+   - Use when you DON'T know which process has the logs
+   - Use for complex queries with AND/OR/NOT logic
+   - Use when you need fuzzy matching for typos
+   - Use for finding exact phrases with quotes
+   - Use for time-based searches (last hour, specific date range)
+   - Much faster than logs tool for large searches
+   - Returns relevance-ranked results with scores
+
+3. **query** tool with type "log_search" - Fallback when search is disabled:
+   - Simple pattern matching only
+   - Use only if search tool returns "not enabled" error
+
+Common search patterns:
+- User asks "find all errors" → search(query: "error")
+- User asks "find database connection issues" → search(query: "database AND connection")
+- User asks "what errors happened in the last hour" → search(query: "error", since: <1 hour ago>)
+- User asks "find timeout errors but not retries" → search(query: "timeout AND error NOT retry")
+- User asks "search for connection (might be misspelled)" → search(query: "conection~")
+- User asks "find exact phrase 'connection refused'" → search(query: "\"connection refused\"")
+- User asks "find all warnings in process 12345" → search(query: "*", level: "warn", process_id: "12345")
+- User asks "debug why app crashed" → search(query: "error OR exception OR crashed OR failed", limit: 100)"#.into()),
         }
     }
     fn list_tools<'a>(
@@ -1143,14 +1302,14 @@ impl ServerHandler for McpServerHandler {
                 annotations: None,
             },
             Tool {
-                name: Cow::Borrowed("stop"),
-                description: Some(Cow::Borrowed("Stop a process")),
+                name: Cow::Borrowed("kill"),
+                description: Some(Cow::Borrowed("Kill a process (terminate tmux session)")),
                 input_schema: Arc::new(serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
                         "process_id": {
                             "type": "string",
-                            "description": "Process ID to stop"
+                            "description": "Process ID to kill"
                         }
                     },
                     "required": ["process_id"]
@@ -1173,20 +1332,20 @@ impl ServerHandler for McpServerHandler {
                 annotations: None,
             },
             Tool {
-                name: Cow::Borrowed("stop_multiple"),
-                description: Some(Cow::Borrowed("Stop multiple processes based on filters")),
+                name: Cow::Borrowed("kill_multiple"),
+                description: Some(Cow::Borrowed("Kill multiple processes based on filters")),
                 input_schema: Arc::new(serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
                         "current_dir": {
                             "type": "boolean",
-                            "description": "Only stop processes from current directory",
+                            "description": "Only kill processes from current directory",
                             "default": false
                         },
                         "names": {
                             "type": "array",
                             "items": { "type": "string" },
-                            "description": "List of process names to stop"
+                            "description": "List of process names to kill"
                         },
                         "force": {
                             "type": "boolean",
@@ -1277,6 +1436,62 @@ impl ServerHandler for McpServerHandler {
                 })).unwrap()),
                 annotations: None,
             },
+            Tool {
+                name: Cow::Borrowed("search"),
+                description: Some(Cow::Borrowed(r#"Powerful full-text search across all process logs with advanced capabilities:
+• Find logs across ALL processes or filter by specific process_id
+• Search for exact phrases: "connection timeout"
+• Boolean queries: error AND timeout, database OR cache, error NOT retry
+• Fuzzy search for typos: databse~ finds "database"
+• Wildcard patterns: time*, *error, dat?base
+• Filter by log level (error, warn, info, debug)
+• Time range filtering with since/until timestamps
+• Returns relevance-ranked results with scores
+• Much faster than grep for large-scale searches
+• Supports complex queries like: (timeout OR refused) AND database NOT "retry succeeded"
+Example: Find all database connection errors in the last hour across all processes"#)),
+                input_schema: Arc::new(serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query with rich syntax: 'error' (simple), 'database AND connection' (boolean), '\"exact phrase\"' (phrases), 'databse~' (fuzzy), 'time*' (wildcard), '(timeout OR refused) NOT retry' (complex)"
+                        },
+                        "process_id": {
+                            "type": "string",
+                            "description": "Filter results to a specific process ID (e.g., '12345'). Omit to search across ALL processes"
+                        },
+                        "level": {
+                            "type": "string",
+                            "enum": ["debug", "info", "warn", "error"],
+                            "description": "Filter by log level. Useful for finding only errors or warnings"
+                        },
+                        "since": {
+                            "type": "string",
+                            "description": "Start time for search range (RFC3339 format, e.g., '2024-01-01T10:00:00Z'). Great for recent events"
+                        },
+                        "until": {
+                            "type": "string",
+                            "description": "End time for search range (RFC3339 format). Use with 'since' to search specific time windows"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of results (default: 50, max: 1000)",
+                            "default": 50
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Offset for pagination"
+                        },
+                        "highlight": {
+                            "type": "boolean",
+                            "description": "Include highlighted snippets with search terms emphasized"
+                        }
+                    },
+                    "required": ["query"]
+                })).unwrap()),
+                annotations: None,
+            },
         ];
 
         Ok(ListToolsResult {
@@ -1325,15 +1540,15 @@ impl ServerHandler for McpServerHandler {
                 };
                 self.handle_logs(args).await
             }
-            "stop" => {
-                let args: StopArgs = if let Some(args) = request.arguments {
+            "kill" => {
+                let args: KillArgs = if let Some(args) = request.arguments {
                     serde_json::from_value(serde_json::Value::Object(args)).map_err(|e| {
-                        McpError::invalid_params(format!("Invalid stop arguments: {}", e), None)
+                        McpError::invalid_params(format!("Invalid kill arguments: {}", e), None)
                     })?
                 } else {
-                    return Ok(Self::create_error_result("Missing stop arguments".to_string()));
+                    return Ok(Self::create_error_result("Missing kill arguments".to_string()));
                 };
-                self.handle_stop(args).await
+                self.handle_kill(args).await
             }
             "restart" => {
                 let args: RestartArgs = if let Some(args) = request.arguments {
@@ -1345,15 +1560,15 @@ impl ServerHandler for McpServerHandler {
                 };
                 self.handle_restart(args).await
             }
-            "stop_multiple" => {
-                let args: StopMultipleArgs = if let Some(args) = request.arguments {
+            "kill_multiple" => {
+                let args: KillMultipleArgs = if let Some(args) = request.arguments {
                     serde_json::from_value(serde_json::Value::Object(args)).map_err(|e| {
-                        McpError::invalid_params(format!("Invalid stop_multiple arguments: {}", e), None)
+                        McpError::invalid_params(format!("Invalid kill_multiple arguments: {}", e), None)
                     })?
                 } else {
-                    StopMultipleArgs { current_dir: false, names: None, force: false }
+                    KillMultipleArgs { current_dir: false, names: None, force: false }
                 };
-                self.handle_stop_multiple(args).await
+                self.handle_kill_multiple(args).await
             }
             "clean" => {
                 let args: CleanArgs = if let Some(args) = request.arguments {
@@ -1374,6 +1589,16 @@ impl ServerHandler for McpServerHandler {
                     return Ok(Self::create_error_result("Missing query arguments".to_string()));
                 };
                 self.handle_query(args).await
+            }
+            "search" => {
+                let args: SearchArgs = if let Some(args) = request.arguments {
+                    serde_json::from_value(serde_json::Value::Object(args)).map_err(|e| {
+                        McpError::invalid_params(format!("Invalid search arguments: {}", e), None)
+                    })?
+                } else {
+                    return Ok(Self::create_error_result("Missing search arguments".to_string()));
+                };
+                self.handle_search(args).await
             }
             _ => Self::create_error_result(format!("Unknown tool: {}", request.name)),
         };
