@@ -27,6 +27,9 @@ enum Commands {
         /// Configuration file path
         #[arg(short, long)]
         config: Option<String>,
+        /// Run as a background daemon (detach from terminal)
+        #[arg(short, long)]
+        daemon: bool,
     },
     
     /// Start a new process
@@ -197,12 +200,108 @@ fn init_default_logging() {
         .init();
 }
 
+/// Daemonize the current process
+fn daemonize_process() -> anyhow::Result<()> {
+    use std::fs::OpenOptions;
+    use std::os::unix::io::AsRawFd;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    
+    // Fork and exit parent
+    let args: Vec<String> = std::env::args().collect();
+    if std::env::var("APM_DAEMON_FORK").is_err() {
+        // First fork - parent process
+        let mut cmd = Command::new(&args[0]);
+        
+        // Pass all arguments except --daemon
+        for (i, arg) in args.iter().enumerate().skip(1) {
+            if arg != "--daemon" && arg != "-d" {
+                // Check if previous arg was --daemon or -d
+                if i > 0 && (args[i-1] == "--daemon" || args[i-1] == "-d") {
+                    continue;
+                }
+                cmd.arg(arg);
+            }
+        }
+        
+        // Set environment variable to indicate we're in the forked process
+        cmd.env("APM_DAEMON_FORK", "1");
+        
+        // Detach from parent process group
+        cmd.stdin(Stdio::null())
+           .stdout(Stdio::null())
+           .stderr(Stdio::null());
+        
+        // Use pre_exec to setsid (create new session)
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        
+        // Spawn the daemon process
+        cmd.spawn()
+            .map_err(|e| anyhow::anyhow!("Failed to spawn daemon: {}", e))?;
+        
+        // Exit the parent process
+        std::process::exit(0);
+    }
+    
+    // We're now in the daemon process
+    // Change working directory to avoid blocking unmounts
+    std::env::set_current_dir("/")
+        .map_err(|e| anyhow::anyhow!("Failed to change directory: {}", e))?;
+    
+    // Set up log file paths
+    let data_dir = dirs::data_dir()
+        .ok_or_else(|| anyhow::anyhow!("Failed to determine data directory"))?
+        .join("apm");
+    
+    std::fs::create_dir_all(&data_dir)?;
+    
+    let log_path = data_dir.join("daemon.log");
+    let pid_path = data_dir.join("apm.pid");
+    
+    // Write PID file
+    let pid = std::process::id();
+    std::fs::write(&pid_path, pid.to_string())?;
+    
+    // Redirect stdout and stderr to log file
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+    
+    let log_fd = log_file.as_raw_fd();
+    
+    unsafe {
+        libc::dup2(log_fd, 1); // stdout
+        libc::dup2(log_fd, 2); // stderr
+    }
+    
+    // Close stdin
+    unsafe {
+        libc::close(0);
+    }
+    
+    println!("APM daemon started with PID {} at {}", pid, chrono::Utc::now());
+    println!("Log file: {}", log_path.display());
+    
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Start { config } => {
+        Commands::Start { config, daemon } => {
+            if daemon {
+                // Daemonize before initializing anything else
+                daemonize_process()?;
+            }
+            
             // Initialize logging
             tracing_subscriber::registry()
                 .with(
@@ -898,7 +997,22 @@ async fn show_status_cli() -> anyhow::Result<()> {
         .await
     {
         Ok(_) => {
-            println!("APM daemon is running on port 7337");
+            println!("✅ APM daemon is running on port 7337");
+            
+            // Check for PID file
+            if let Some(data_dir) = dirs::data_dir() {
+                let pid_path = data_dir.join("apm").join("apm.pid");
+                if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+                    if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                        println!("   PID: {}", pid);
+                    }
+                }
+                
+                let log_path = data_dir.join("apm").join("daemon.log");
+                if log_path.exists() {
+                    println!("   Log: {}", log_path.display());
+                }
+            }
             
             // Get additional summary info
             if let Ok(response) = client
@@ -965,6 +1079,14 @@ async fn shutdown_cli(force: bool) -> anyhow::Result<()> {
                 Ok(response) => {
                     if response.status().is_success() {
                         println!("✅ APM daemon shutdown initiated");
+                        
+                        // Clean up PID file if it exists
+                        if let Some(data_dir) = dirs::data_dir() {
+                            let pid_path = data_dir.join("apm").join("apm.pid");
+                            if pid_path.exists() {
+                                let _ = std::fs::remove_file(&pid_path);
+                            }
+                        }
                         
                         // Wait a moment and verify it's down
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
