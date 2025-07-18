@@ -44,10 +44,13 @@ struct SpawnArgs {
     command: String,
     #[serde(default)]
     args: Vec<String>,
+    #[serde(default)]
+    cwd: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LogsArgs {
+    cwd: String,
     process_id: String,
     #[serde(default = "default_limit")]
     limit: usize,
@@ -65,22 +68,26 @@ fn default_limit() -> usize {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct KillArgs {
+    cwd: String,
     process_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct RestartArgs {
+    cwd: String,
     process_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ListArgs {
+    cwd: String,
     #[serde(default)]
     current_dir: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QueryArgs {
+    cwd: String,
     #[serde(rename = "type")]
     query_type: String,
     #[serde(default)]
@@ -105,6 +112,7 @@ struct QueryArgs {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct KillMultipleArgs {
+    cwd: String,
     #[serde(default)]
     current_dir: bool,
     #[serde(default)]
@@ -115,6 +123,7 @@ struct KillMultipleArgs {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CleanArgs {
+    cwd: String,
     #[serde(default)]
     older_than: Option<u64>,
     #[serde(default)]
@@ -125,6 +134,7 @@ struct CleanArgs {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct SearchArgs {
+    cwd: String,
     query: String,
     #[serde(default)]
     process_id: Option<String>,
@@ -204,12 +214,26 @@ impl McpServerHandler {
     async fn handle_spawn(&self, args: SpawnArgs) -> CallToolResult {
         debug!("MCP spawn tool called: {:?}", args);
 
-        // Get the current working directory for access control and process config
-        let (access_group, cwd) = match std::env::current_dir() {
-            Ok(cwd) => (Some(crate::utils::access_group_from_dir(&cwd)), Some(cwd)),
-            Err(e) => {
-                error!("Failed to get current directory: {}", e);
-                (None, None)
+        // Use provided cwd or fall back to current directory
+        let (access_group, cwd) = if let Some(cwd_str) = args.cwd {
+            // Parse the provided working directory
+            match std::path::PathBuf::from(&cwd_str).canonicalize() {
+                Ok(cwd_path) => {
+                    let access_group = Some(crate::utils::access_group_from_dir(&cwd_path));
+                    (access_group, Some(cwd_path))
+                }
+                Err(e) => {
+                    return Self::create_error_result(format!("Invalid working directory '{}': {}", cwd_str, e));
+                }
+            }
+        } else {
+            // Fall back to current directory for backward compatibility
+            match std::env::current_dir() {
+                Ok(cwd) => (Some(crate::utils::access_group_from_dir(&cwd)), Some(cwd)),
+                Err(e) => {
+                    error!("Failed to get current directory: {}", e);
+                    (None, None)
+                }
             }
         };
 
@@ -246,19 +270,19 @@ impl McpServerHandler {
     async fn handle_list(&self, args: ListArgs) -> CallToolResult {
         debug!("MCP list tool called: {:?}", args);
 
+        // Parse the provided working directory
+        let cwd_path = match std::path::PathBuf::from(&args.cwd).canonicalize() {
+            Ok(path) => path,
+            Err(e) => {
+                return Self::create_error_result(format!("Invalid working directory '{}': {}", args.cwd, e));
+            }
+        };
+        let access_group = Some(crate::utils::access_group_from_dir(&cwd_path));
+
         match self.process_manager.list_processes().await {
             Ok(processes) => {
                 // Filter processes by access group if current_dir is true
                 let filtered_processes: Vec<_> = if args.current_dir {
-                    // Get the current working directory for access control
-                    let access_group = match std::env::current_dir() {
-                        Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
-                        Err(e) => {
-                            error!("Failed to get current directory: {}", e);
-                            None
-                        }
-                    };
-                    
                     processes
                         .into_iter()
                         .filter(|p| {
@@ -324,14 +348,14 @@ impl McpServerHandler {
             }
         };
 
-        // Get the current working directory for access control
-        let access_group = match std::env::current_dir() {
-            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+        // Parse the provided working directory for access control
+        let cwd_path = match std::path::PathBuf::from(&args.cwd).canonicalize() {
+            Ok(path) => path,
             Err(e) => {
-                error!("Failed to get current directory: {}", e);
-                None
+                return Self::create_error_result(format!("Invalid working directory '{}': {}", args.cwd, e));
             }
         };
+        let access_group = Some(crate::utils::access_group_from_dir(&cwd_path));
 
         // Check if process exists and is accessible
         match self.process_manager.get_process(&process_id).await {
@@ -412,14 +436,14 @@ impl McpServerHandler {
             }
         };
 
-        // Get the current working directory for access control
-        let access_group = match std::env::current_dir() {
-            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+        // Parse the provided working directory for access control
+        let cwd_path = match std::path::PathBuf::from(&args.cwd).canonicalize() {
+            Ok(path) => path,
             Err(e) => {
-                error!("Failed to get current directory: {}", e);
-                None
+                return Self::create_error_result(format!("Invalid working directory '{}': {}", args.cwd, e));
             }
         };
+        let access_group = Some(crate::utils::access_group_from_dir(&cwd_path));
 
         // Check if process exists and is accessible
         match self.process_manager.get_process(&process_id).await {
@@ -466,14 +490,14 @@ impl McpServerHandler {
             }
         };
 
-        // Get the current working directory for access control
-        let access_group = match std::env::current_dir() {
-            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+        // Parse the provided working directory for access control
+        let cwd_path = match std::path::PathBuf::from(&args.cwd).canonicalize() {
+            Ok(path) => path,
             Err(e) => {
-                error!("Failed to get current directory: {}", e);
-                None
+                return Self::create_error_result(format!("Invalid working directory '{}': {}", args.cwd, e));
             }
         };
+        let access_group = Some(crate::utils::access_group_from_dir(&cwd_path));
 
         // Check if process exists and is accessible
         match self.process_manager.get_process(&process_id).await {
@@ -515,14 +539,14 @@ impl McpServerHandler {
     async fn handle_kill_multiple(&self, args: KillMultipleArgs) -> CallToolResult {
         debug!("MCP kill_multiple tool called: {:?}", args);
 
-        // Get the current working directory for access control
-        let access_group = match std::env::current_dir() {
-            Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
+        // Parse the provided working directory for access control
+        let cwd_path = match std::path::PathBuf::from(&args.cwd).canonicalize() {
+            Ok(path) => path,
             Err(e) => {
-                error!("Failed to get current directory: {}", e);
-                None
+                return Self::create_error_result(format!("Invalid working directory '{}': {}", args.cwd, e));
             }
         };
+        let access_group = Some(crate::utils::access_group_from_dir(&cwd_path));
 
         // Get all processes
         let all_processes = match self.process_manager.list_processes().await {
@@ -599,15 +623,17 @@ impl McpServerHandler {
     async fn handle_clean(&self, args: CleanArgs) -> CallToolResult {
         debug!("MCP clean tool called: {:?}", args);
 
+        // Parse the provided working directory
+        let cwd_path = match std::path::PathBuf::from(&args.cwd).canonicalize() {
+            Ok(path) => path,
+            Err(e) => {
+                return Self::create_error_result(format!("Invalid working directory '{}': {}", args.cwd, e));
+            }
+        };
+        
         // Get access group for filtering if current_dir is true
         let access_group = if args.current_dir {
-            match std::env::current_dir() {
-                Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
-                Err(e) => {
-                    error!("Failed to get current directory: {}", e);
-                    None
-                }
-            }
+            Some(crate::utils::access_group_from_dir(&cwd_path))
         } else {
             None
         };
@@ -740,21 +766,29 @@ impl McpServerHandler {
     async fn handle_query(&self, args: QueryArgs) -> CallToolResult {
         debug!("MCP query tool called: {:?}", args);
 
+        // Parse the provided working directory
+        let cwd_path = match std::path::PathBuf::from(&args.cwd).canonicalize() {
+            Ok(path) => path,
+            Err(e) => {
+                return Self::create_error_result(format!("Invalid working directory '{}': {}", args.cwd, e));
+            }
+        };
+
         let result = match args.query_type.as_str() {
-            "system_overview" => self.query_system_overview(args.current_dir).await,
-            "process_errors" => self.query_process_errors(args.process_filter, args.time_window, args.min_severity, args.current_dir).await,
-            "port_mapping" => self.query_port_mapping(args.include_urls.unwrap_or(false), args.current_dir).await,
-            "performance_metrics" => self.query_performance_metrics(args.process_filter, args.metrics.unwrap_or_else(|| vec!["cpu".to_string(), "memory".to_string()]), args.current_dir).await,
+            "system_overview" => self.query_system_overview(&cwd_path, args.current_dir).await,
+            "process_errors" => self.query_process_errors(&cwd_path, args.process_filter, args.time_window, args.min_severity, args.current_dir).await,
+            "port_mapping" => self.query_port_mapping(&cwd_path, args.include_urls.unwrap_or(false), args.current_dir).await,
+            "performance_metrics" => self.query_performance_metrics(&cwd_path, args.process_filter, args.metrics.unwrap_or_else(|| vec!["cpu".to_string(), "memory".to_string()]), args.current_dir).await,
             "log_search" => {
                 if let Some(pattern) = args.pattern {
-                    self.query_log_search(pattern, args.process_filter, args.limit, args.current_dir).await
+                    self.query_log_search(&cwd_path, pattern, args.process_filter, args.limit, args.current_dir).await
                 } else {
                     return Self::create_error_result("log_search requires 'pattern' parameter".to_string());
                 }
             }
             "event_correlation" => {
                 if let Some(event_types) = args.event_types {
-                    self.query_event_correlation(event_types, args.time_window, args.current_dir).await
+                    self.query_event_correlation(&cwd_path, event_types, args.time_window, args.current_dir).await
                 } else {
                     return Self::create_error_result("event_correlation requires 'event_types' parameter".to_string());
                 }
@@ -776,16 +810,10 @@ impl McpServerHandler {
     }
 
     // Helper methods
-    async fn query_system_overview(&self, current_dir: bool) -> Result<Value> {
-        // Get the current working directory for access control if current_dir is true
+    async fn query_system_overview(&self, cwd_path: &std::path::Path, current_dir: bool) -> Result<Value> {
+        // Use the provided working directory for access control if current_dir is true
         let access_group = if current_dir {
-            match std::env::current_dir() {
-                Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
-                Err(e) => {
-                    error!("Failed to get current directory: {}", e);
-                    None
-                }
-            }
+            Some(crate::utils::access_group_from_dir(cwd_path))
         } else {
             None
         };
@@ -819,16 +847,10 @@ impl McpServerHandler {
         Ok(overview)
     }
 
-    async fn query_process_errors(&self, process_filter: Option<Vec<String>>, _time_window: Option<String>, _min_severity: Option<String>, current_dir: bool) -> Result<Value> {
-        // Get the current working directory for access control if current_dir is true
+    async fn query_process_errors(&self, cwd_path: &std::path::Path, process_filter: Option<Vec<String>>, _time_window: Option<String>, _min_severity: Option<String>, current_dir: bool) -> Result<Value> {
+        // Use the provided working directory for access control if current_dir is true
         let access_group = if current_dir {
-            match std::env::current_dir() {
-                Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
-                Err(e) => {
-                    error!("Failed to get current directory: {}", e);
-                    None
-                }
-            }
+            Some(crate::utils::access_group_from_dir(cwd_path))
         } else {
             None
         };
@@ -888,7 +910,7 @@ impl McpServerHandler {
         Ok(json!({ "errors": all_errors }))
     }
 
-    async fn query_port_mapping(&self, include_urls: bool, current_dir: bool) -> Result<Value> {
+    async fn query_port_mapping(&self, cwd_path: &std::path::Path, include_urls: bool, current_dir: bool) -> Result<Value> {
         let access_group = if current_dir {
             match std::env::current_dir() {
                 Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
@@ -961,7 +983,7 @@ impl McpServerHandler {
         Ok(data)
     }
 
-    async fn query_performance_metrics(&self, process_filter: Option<Vec<String>>, metrics: Vec<String>, current_dir: bool) -> Result<Value> {
+    async fn query_performance_metrics(&self, cwd_path: &std::path::Path, process_filter: Option<Vec<String>>, metrics: Vec<String>, current_dir: bool) -> Result<Value> {
         let access_group = if current_dir {
             match std::env::current_dir() {
                 Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
@@ -1035,7 +1057,7 @@ impl McpServerHandler {
         }))
     }
 
-    async fn query_log_search(&self, pattern: String, process_filter: Option<Vec<String>>, limit: Option<usize>, current_dir: bool) -> Result<Value> {
+    async fn query_log_search(&self, cwd_path: &std::path::Path, pattern: String, process_filter: Option<Vec<String>>, limit: Option<usize>, current_dir: bool) -> Result<Value> {
         let access_group = if current_dir {
             match std::env::current_dir() {
                 Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
@@ -1111,7 +1133,7 @@ impl McpServerHandler {
         }))
     }
 
-    async fn query_event_correlation(&self, event_types: Vec<String>, time_window: Option<String>, current_dir: bool) -> Result<Value> {
+    async fn query_event_correlation(&self, cwd_path: &std::path::Path, event_types: Vec<String>, time_window: Option<String>, current_dir: bool) -> Result<Value> {
         let access_group = if current_dir {
             match std::env::current_dir() {
                 Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
@@ -1252,9 +1274,13 @@ Common search patterns:
                             "type": "array",
                             "items": { "type": "string" },
                             "description": "Command arguments"
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Client's current working directory (required for access control)"
                         }
                     },
-                    "required": ["name", "command"]
+                    "required": ["name", "command", "cwd"]
                 })).unwrap()),
                 annotations: None,
             },
@@ -1264,12 +1290,17 @@ Common search patterns:
                 input_schema: Arc::new(serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Client's current working directory (required for access control)"
+                        },
                         "current_dir": {
                             "type": "boolean",
                             "description": "Filter to only show processes from current directory",
                             "default": false
                         }
-                    }
+                    },
+                    "required": ["cwd"]
                 })).unwrap()),
                 annotations: None,
             },
@@ -1279,6 +1310,10 @@ Common search patterns:
                 input_schema: Arc::new(serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Client's current working directory (required for access control)"
+                        },
                         "process_id": {
                             "type": "string",
                             "description": "Process ID"
@@ -1301,7 +1336,7 @@ Common search patterns:
                             "description": "RFC3339 timestamp to get logs since"
                         }
                     },
-                    "required": ["process_id"]
+                    "required": ["cwd", "process_id"]
                 })).unwrap()),
                 annotations: None,
             },
@@ -1316,7 +1351,7 @@ Common search patterns:
                             "description": "Process ID to kill"
                         }
                     },
-                    "required": ["process_id"]
+                    "required": ["cwd", "process_id"]
                 })).unwrap()),
                 annotations: None,
             },
@@ -1331,7 +1366,7 @@ Common search patterns:
                             "description": "Process ID to restart"
                         }
                     },
-                    "required": ["process_id"]
+                    "required": ["cwd", "process_id"]
                 })).unwrap()),
                 annotations: None,
             },
@@ -1341,6 +1376,10 @@ Common search patterns:
                 input_schema: Arc::new(serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Client's current working directory (required for access control)"
+                        },
                         "current_dir": {
                             "type": "boolean",
                             "description": "Only kill processes from current directory",
@@ -1356,7 +1395,8 @@ Common search patterns:
                             "description": "Skip confirmation",
                             "default": false
                         }
-                    }
+                    },
+                    "required": ["cwd"]
                 })).unwrap()),
                 annotations: None,
             },
@@ -1366,6 +1406,10 @@ Common search patterns:
                 input_schema: Arc::new(serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Client's current working directory (required for access control)"
+                        },
                         "older_than": {
                             "type": "integer",
                             "description": "Clean processes stopped more than N hours ago"
@@ -1380,7 +1424,8 @@ Common search patterns:
                             "description": "Only clean processes from current directory",
                             "default": false
                         }
-                    }
+                    },
+                    "required": ["cwd"]
                 })).unwrap()),
                 annotations: None,
             },
@@ -1390,6 +1435,10 @@ Common search patterns:
                 input_schema: Arc::new(serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Client's current working directory (required for access control)"
+                        },
                         "type": {
                             "type": "string",
                             "enum": ["system_overview", "process_errors", "port_mapping", "performance_metrics", "log_search", "event_correlation"],
@@ -1436,7 +1485,7 @@ Common search patterns:
                             "default": false
                         }
                     },
-                    "required": ["type"]
+                    "required": ["cwd", "type"]
                 })).unwrap()),
                 annotations: None,
             },
@@ -1457,6 +1506,10 @@ Example: Find all database connection errors in the last hour across all process
                 input_schema: Arc::new(serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Client's current working directory (required for access control)"
+                        },
                         "query": {
                             "type": "string",
                             "description": "Search query with rich syntax: 'error' (simple), 'database AND connection' (boolean), '\"exact phrase\"' (phrases), 'databse~' (fuzzy), 'time*' (wildcard), '(timeout OR refused) NOT retry' (complex)"
@@ -1492,7 +1545,7 @@ Example: Find all database connection errors in the last hour across all process
                             "description": "Include highlighted snippets with search terms emphasized"
                         }
                     },
-                    "required": ["query"]
+                    "required": ["cwd", "query"]
                 })).unwrap()),
                 annotations: None,
             },
@@ -1530,7 +1583,7 @@ Example: Find all database connection errors in the last hour across all process
                         McpError::invalid_params(format!("Invalid list arguments: {}", e), None)
                     })?
                 } else {
-                    ListArgs { current_dir: false }
+                    return Ok(Self::create_error_result("Missing list arguments".to_string()));
                 };
                 self.handle_list(args).await
             }
@@ -1570,7 +1623,7 @@ Example: Find all database connection errors in the last hour across all process
                         McpError::invalid_params(format!("Invalid kill_multiple arguments: {}", e), None)
                     })?
                 } else {
-                    KillMultipleArgs { current_dir: false, names: None, force: false }
+                    return Ok(Self::create_error_result("Missing kill_multiple arguments".to_string()));
                 };
                 self.handle_kill_multiple(args).await
             }
@@ -1580,7 +1633,7 @@ Example: Find all database connection errors in the last hour across all process
                         McpError::invalid_params(format!("Invalid clean arguments: {}", e), None)
                     })?
                 } else {
-                    CleanArgs { older_than: None, keep_logs: false, current_dir: false }
+                    return Ok(Self::create_error_result("Missing clean arguments".to_string()));
                 };
                 self.handle_clean(args).await
             }
