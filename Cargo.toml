@@ -127,6 +127,10 @@ path = "tests/unit/log_storage_test.rs"
 name = "log_summarizer_test"
 path = "tests/unit/log_summarizer_test.rs"
 
+[[test]]
+name = "tag_management_test"
+path = "tests/unit/tag_management_test.rs"
+
 # Integration tests
 [[test]]
 name = "agent_api_test"
@@ -135,6 +139,10 @@ path = "tests/integration/rust/agent_api_test.rs"
 [[test]]
 name = "api_integration_test"
 path = "tests/integration/rust/api_integration_test.rs"
+
+[[test]]
+name = "tag_api_test"
+path = "tests/integration/rust/tag_api_test.rs"
 
 [[test]]
 name = "mcp_simple_test"

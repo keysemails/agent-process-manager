@@ -60,6 +60,15 @@ enum Commands {
         /// Output format (table, json, csv)
         #[arg(long, default_value = "table")]
         format: String,
+        /// Filter by tag (can be used multiple times for OR logic)
+        #[arg(short, long)]
+        tag: Vec<String>,
+        /// Filter by tags (comma-separated) - process must have ANY of these tags
+        #[arg(long)]
+        tags_any: Option<String>,
+        /// Filter by tags (comma-separated) - process must have ALL of these tags
+        #[arg(long)]
+        tags_all: Option<String>,
     },
     
     /// Show process logs
@@ -169,11 +178,51 @@ enum Commands {
         port: u16,
     },
     
+    /// Tag management commands
+    Tag {
+        #[command(subcommand)]
+        tag_command: TagCommands,
+    },
+    
     /// Configuration management commands
     Config {
         #[command(subcommand)]
         config_command: ConfigCommands,
     },
+}
+
+#[derive(Subcommand)]
+enum TagCommands {
+    /// Add a tag to a process
+    Add {
+        /// Process name or ID
+        process: String,
+        /// Tag to add
+        tag: String,
+        /// Access process from any directory
+        #[arg(long)]
+        all: bool,
+    },
+    /// Remove a tag from a process
+    Remove {
+        /// Process name or ID
+        process: String,
+        /// Tag to remove
+        tag: String,
+        /// Access process from any directory
+        #[arg(long)]
+        all: bool,
+    },
+    /// List all tags for a process
+    List {
+        /// Process name or ID
+        process: String,
+        /// Access process from any directory
+        #[arg(long)]
+        all: bool,
+    },
+    /// List all tags in the system
+    All,
 }
 
 #[derive(Subcommand)]
@@ -291,6 +340,203 @@ fn daemonize_process() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn handle_tag_command(tag_command: TagCommands) -> anyhow::Result<()> {
+    match tag_command {
+        TagCommands::Add { process, tag, all } => {
+            add_tag_cli(process, tag, all).await
+        }
+        TagCommands::Remove { process, tag, all } => {
+            remove_tag_cli(process, tag, all).await
+        }
+        TagCommands::List { process, all } => {
+            list_process_tags_cli(process, all).await
+        }
+        TagCommands::All => {
+            list_all_tags_cli().await
+        }
+    }
+}
+
+async fn add_tag_cli(process_name: String, tag: String, all: bool) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    
+    // First, get the process ID
+    let process_id = get_process_id_by_name(&client, &process_name, all).await?;
+    
+    let add_tag_request = serde_json::json!({"tag": tag});
+    
+    let response = client
+        .post(&format!("http://localhost:7337/api/processes/{}/tags", process_id))
+        .json(&add_tag_request)
+        .send()
+        .await?;
+    
+    if response.status().is_success() {
+        println!("✅ Added tag '{}' to process '{}'", tag, process_name);
+    } else {
+        let error_text = response.text().await?;
+        eprintln!("❌ Failed to add tag: {}", error_text);
+    }
+    
+    Ok(())
+}
+
+async fn remove_tag_cli(process_name: String, tag: String, all: bool) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    
+    // First, get the process ID
+    let process_id = get_process_id_by_name(&client, &process_name, all).await?;
+    
+    let response = client
+        .delete(&format!("http://localhost:7337/api/processes/{}/tags/{}", process_id, tag))
+        .send()
+        .await?;
+    
+    if response.status().is_success() {
+        println!("✅ Removed tag '{}' from process '{}'", tag, process_name);
+    } else {
+        let error_text = response.text().await?;
+        eprintln!("❌ Failed to remove tag: {}", error_text);
+    }
+    
+    Ok(())
+}
+
+async fn list_process_tags_cli(process_name: String, all: bool) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    
+    // First, get the process ID
+    let process_id = get_process_id_by_name(&client, &process_name, all).await?;
+    
+    let response = client
+        .get(&format!("http://localhost:7337/api/processes/{}/tags", process_id))
+        .send()
+        .await?;
+    
+    if response.status().is_success() {
+        let data: serde_json::Value = response.json().await?;
+        if let Some(tags) = data["data"]["tags"].as_array() {
+            if tags.is_empty() {
+                println!("Process '{}' has no tags", process_name);
+            } else {
+                println!("Tags for process '{}':", process_name);
+                for tag in tags {
+                    if let Some(tag_str) = tag.as_str() {
+                        println!("  - {}", tag_str);
+                    }
+                }
+            }
+        }
+    } else {
+        let error_text = response.text().await?;
+        eprintln!("❌ Failed to get tags: {}", error_text);
+    }
+    
+    Ok(())
+}
+
+async fn list_all_tags_cli() -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    
+    let response = client
+        .get("http://localhost:7337/api/tags")
+        .send()
+        .await?;
+    
+    if response.status().is_success() {
+        let data: serde_json::Value = response.json().await?;
+        if let Some(tags) = data["data"]["tags"].as_array() {
+            if tags.is_empty() {
+                println!("No tags found in the system");
+            } else {
+                println!("All tags in the system:");
+                for tag in tags {
+                    if let Some(tag_str) = tag.as_str() {
+                        println!("  - {}", tag_str);
+                    }
+                }
+            }
+        }
+    } else {
+        let error_text = response.text().await?;
+        eprintln!("❌ Failed to get all tags: {}", error_text);
+    }
+    
+    Ok(())
+}
+
+async fn get_process_id_by_name(client: &reqwest::Client, process_name: &str, all: bool) -> anyhow::Result<String> {
+    // Load config for access control settings
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(_) => Config::default(),
+    };
+    
+    let response = client
+        .get("http://localhost:7337/api/processes")
+        .send()
+        .await?;
+    
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!("Failed to get processes: {}", response.text().await?));
+    }
+    
+    let data: serde_json::Value = response.json().await?;
+    
+    // Get current working directory for filtering (unless --all is specified)
+    let access_group = if !all {
+        match std::env::current_dir() {
+            Ok(cwd) => Some(agent_process_manager::utils::access_group_from_dir(&cwd)),
+            Err(e) => {
+                eprintln!("Warning: Failed to get current directory: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    
+    if let Some(processes) = data["data"].as_array() {
+        let matches: Vec<&serde_json::Value> = processes.iter()
+            .filter(|process| {
+                // Check access permissions
+                let access_allowed = if let Some(ref group) = access_group {
+                    agent_process_manager::utils::check_access(
+                        Some(group),
+                        process["access_group"].as_str(),
+                        true,  // write operation
+                        &config.access_control.mode
+                    )
+                } else {
+                    true
+                };
+                
+                if !access_allowed {
+                    return false;
+                }
+                
+                // Check name match (support both ID and name)
+                process["name"].as_str() == Some(process_name) || 
+                process["id"].as_str() == Some(process_name)
+            })
+            .collect();
+        
+        match matches.len() {
+            0 => Err(anyhow::anyhow!("Process '{}' not found", process_name)),
+            1 => Ok(matches[0]["id"].as_str().unwrap().to_string()),
+            _ => {
+                eprintln!("Multiple processes found with name '{}'. Use process ID instead:", process_name);
+                for process in matches {
+                    eprintln!("  - {} ({})", process["name"].as_str().unwrap_or("unknown"), process["id"].as_str().unwrap_or("unknown"));
+                }
+                Err(anyhow::anyhow!("Ambiguous process name"))
+            }
+        }
+    } else {
+        Err(anyhow::anyhow!("Invalid response format"))
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -317,9 +563,9 @@ async fn main() -> anyhow::Result<()> {
             init_default_logging();
             start_process_cli(name, command, args, tag, pty).await
         }
-        Commands::List { all, wrap, format } => {
+        Commands::List { all, wrap, format, tag, tags_any, tags_all } => {
             init_default_logging();
-            list_processes_cli(all, wrap, format).await
+            list_processes_cli_with_tags(all, wrap, format, tag, tags_any, tags_all).await
         }
         Commands::Logs { name, errors, follow, all } => {
             init_default_logging();
@@ -360,6 +606,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::McpBridge { host, port } => {
             // Don't initialize logging for bridge mode - we need clean stdio
             run_mcp_bridge(host, port).await
+        }
+        Commands::Tag { tag_command } => {
+            init_default_logging();
+            handle_tag_command(tag_command).await
         }
         Commands::Config { config_command } => {
             init_default_logging();
@@ -590,7 +840,14 @@ async fn start_process_cli(
     Ok(())
 }
 
-async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyhow::Result<()> {
+async fn list_processes_cli_with_tags(
+    show_all: bool, 
+    wrap: bool, 
+    format: String,
+    tag_filters: Vec<String>,
+    tags_any: Option<String>,
+    tags_all: Option<String>
+) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     
     // Load config to check access control settings
@@ -621,10 +878,11 @@ async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyho
         };
         
         if let Some(processes) = data["data"].as_array() {
-            // Filter processes based on access group
+            // Filter processes based on access group and tags
             let filtered_processes: Vec<&serde_json::Value> = processes.iter()
                 .filter(|process| {
-                    if let Some(ref group) = access_group {
+                    // Access group filtering
+                    let access_allowed = if let Some(ref group) = access_group {
                         agent_process_manager::utils::check_access(
                             Some(group),
                             process["access_group"].as_str(),
@@ -633,7 +891,51 @@ async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyho
                         )
                     } else {
                         true
+                    };
+                    
+                    if !access_allowed {
+                        return false;
                     }
+                    
+                    // Tag filtering
+                    let process_tags = match process["tags"].as_array() {
+                        Some(tags) => tags.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>(),
+                        None => vec![],
+                    };
+                    
+                    // Apply --tag filters (OR logic)
+                    if !tag_filters.is_empty() {
+                        let has_any_tag = tag_filters.iter().any(|filter_tag| {
+                            process_tags.contains(&filter_tag.as_str())
+                        });
+                        if !has_any_tag {
+                            return false;
+                        }
+                    }
+                    
+                    // Apply --tags-any filter
+                    if let Some(ref tags_any_str) = tags_any {
+                        let any_tags: Vec<&str> = tags_any_str.split(',').map(|s| s.trim()).collect();
+                        let has_any_tag = any_tags.iter().any(|filter_tag| {
+                            process_tags.contains(filter_tag)
+                        });
+                        if !has_any_tag {
+                            return false;
+                        }
+                    }
+                    
+                    // Apply --tags-all filter
+                    if let Some(ref tags_all_str) = tags_all {
+                        let all_tags: Vec<&str> = tags_all_str.split(',').map(|s| s.trim()).collect();
+                        let has_all_tags = all_tags.iter().all(|filter_tag| {
+                            process_tags.contains(filter_tag)
+                        });
+                        if !has_all_tags {
+                            return false;
+                        }
+                    }
+                    
+                    true
                 })
                 .collect();
             
@@ -645,7 +947,7 @@ async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyho
                 }
                 "csv" => {
                     // CSV output
-                    println!("name,status,session_pid,uptime_seconds,started_at,ports,directory");
+                    println!("name,status,session_pid,uptime_seconds,started_at,ports,directory,tags");
                     for process in filtered_processes {
                         let name = process["name"].as_str().unwrap_or("");
                         let status = process["status"].as_str().unwrap_or("");
@@ -661,7 +963,15 @@ async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyho
                             String::new()
                         };
                         let cwd = process["cwd"].as_str().unwrap_or("");
-                        println!("{},{},{},{},{},{},{}", name, status, session_pid, uptime, started, ports, cwd);
+                        let tags = if let Some(tags) = process["tags"].as_array() {
+                            tags.iter()
+                                .filter_map(|t| t.as_str())
+                                .collect::<Vec<_>>()
+                                .join(";")
+                        } else {
+                            String::new()
+                        };
+                        println!("{},{},{},{},{},{},{},{}", name, status, session_pid, uptime, started, ports, cwd, tags);
                     }
                 }
                 _ => {
@@ -671,7 +981,7 @@ async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyho
                         .map(|(terminal_size::Width(w), _)| w as usize)
                         .unwrap_or(80);
                     
-                    let fixed_width = 65;
+                    let fixed_width = 77; // Increased to account for TAGS column
                     let dir_width = if wrap {
                         // If wrapping, use more space for directory
                         if term_width > fixed_width + 10 {
@@ -688,8 +998,8 @@ async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyho
                         }
                     };
                     
-                    println!("{:<15} {:<8} {:<8} {:<8} {:<10} {:<10} {:<width$}", 
-                        "NAME", "STATUS", "SESSION_PID", "UPTIME", "STARTED", "PORTS", "DIRECTORY",
+                    println!("{:<15} {:<8} {:<8} {:<8} {:<10} {:<10} {:<12} {:<width$}", 
+                        "NAME", "STATUS", "SESSION_PID", "UPTIME", "STARTED", "PORTS", "TAGS", "DIRECTORY",
                         width = dir_width
                     );
                     println!("{}", "-".repeat(fixed_width + dir_width));
@@ -780,29 +1090,52 @@ async fn list_processes_cli(show_all: bool, wrap: bool, format: String) -> anyho
                     ports_str.bright_cyan()
                 };
                 
+                // Format tags with color coding
+                let tags_str = if let Some(tags) = process["tags"].as_array() {
+                    let tag_names: Vec<String> = tags.iter()
+                        .filter_map(|t| t.as_str())
+                        .map(|t| t.to_string())
+                        .collect();
+                    if tag_names.is_empty() {
+                        "-".to_string()
+                    } else {
+                        tag_names.join(",")
+                    }
+                } else {
+                    "-".to_string()
+                };
+                
+                let tags_colored = if tags_str == "-" {
+                    tags_str.dimmed()
+                } else {
+                    tags_str.bright_blue()
+                };
+                
                 if wrap && cwd_str.len() > dir_width {
                     // Multi-line output for wrapped mode
                     println!(
-                        "{:<15} {:<8} {:<8} {:<8} {:<10} {:<10}",
-                        name_display,
-                        status_colored,
-                        process["session_pid"].as_u64().unwrap_or(0),
-                        format!("{}s", process["uptime_seconds"].as_u64().unwrap_or(0)),
-                        started_str,
-                        ports_colored
-                    );
-                    // Print wrapped directory on next line with indent
-                    println!("    {}", cwd_str.dimmed());
-                } else {
-                    // Single line output
-                    println!(
-                        "{:<15} {:<8} {:<8} {:<8} {:<10} {:<10} {:<width$}",
+                        "{:<15} {:<8} {:<8} {:<8} {:<10} {:<10} {:<12}",
                         name_display,
                         status_colored,
                         process["session_pid"].as_u64().unwrap_or(0),
                         format!("{}s", process["uptime_seconds"].as_u64().unwrap_or(0)),
                         started_str,
                         ports_colored,
+                        tags_colored
+                    );
+                    // Print wrapped directory on next line with indent
+                    println!("    {}", cwd_str.dimmed());
+                } else {
+                    // Single line output
+                    println!(
+                        "{:<15} {:<8} {:<8} {:<8} {:<10} {:<10} {:<12} {:<width$}",
+                        name_display,
+                        status_colored,
+                        process["session_pid"].as_u64().unwrap_or(0),
+                        format!("{}s", process["uptime_seconds"].as_u64().unwrap_or(0)),
+                        started_str,
+                        ports_colored,
+                        tags_colored,
                         cwd_str.dimmed(),
                         width = dir_width
                     );

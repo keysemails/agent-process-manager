@@ -61,9 +61,29 @@ pub async fn create_process(
 
 pub async fn list_processes(
     Extension(process_manager): Extension<Arc<ProcessManager>>,
+    Query(params): Query<ListProcessesParams>,
 ) -> impl IntoResponse {
     match process_manager.list_processes().await {
-        Ok(processes) => (StatusCode::OK, Json(ApiResponse::success(processes))).into_response(),
+        Ok(mut processes) => {
+            // Apply tag filtering if requested
+            if let Some(tags_str) = params.tags {
+                let filter_tags: Vec<String> = tags_str.split(',').map(|s| s.trim().to_string()).collect();
+                processes.retain(|p| {
+                    // OR query: process must have at least one of the filter tags
+                    filter_tags.iter().any(|tag| p.tags.contains(tag))
+                });
+            }
+            
+            if let Some(all_tags_str) = params.all_tags {
+                let filter_tags: Vec<String> = all_tags_str.split(',').map(|s| s.trim().to_string()).collect();
+                processes.retain(|p| {
+                    // AND query: process must have all of the filter tags
+                    filter_tags.iter().all(|tag| p.tags.contains(tag))
+                });
+            }
+            
+            (StatusCode::OK, Json(ApiResponse::success(processes))).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::<Vec<serde_json::Value>>::error(e.to_string())),
@@ -126,6 +146,17 @@ pub struct CleanParams {
     older_than: Option<u64>,
     access_group: Option<String>,
     keep_logs: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct ListProcessesParams {
+    tags: Option<String>,        // comma-separated tags for OR query
+    all_tags: Option<String>,    // comma-separated tags for AND query
+}
+
+#[derive(Deserialize)]
+pub struct AddTagRequest {
+    tag: String,
 }
 
 pub async fn clean_processes(
@@ -996,4 +1027,95 @@ pub async fn shutdown_daemon() -> impl IntoResponse {
     });
     
     response
+}
+
+// Tag management endpoints
+
+pub async fn add_tag_to_process(
+    Extension(process_manager): Extension<Arc<ProcessManager>>,
+    Path(id): Path<String>,
+    Json(request): Json<AddTagRequest>,
+) -> impl IntoResponse {
+    let process_id = ProcessId(id.parse().unwrap());
+    
+    match process_manager.add_tag(&process_id, &request.tag).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(ApiResponse::success(serde_json::json!({
+                "message": "Tag added successfully",
+                "tag": request.tag
+            }))),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<serde_json::Value>::error(e.to_string())),
+        ).into_response(),
+    }
+}
+
+pub async fn remove_tag_from_process(
+    Extension(process_manager): Extension<Arc<ProcessManager>>,
+    Path((id, tag)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let process_id = ProcessId(id.parse().unwrap());
+    
+    match process_manager.remove_tag(&process_id, &tag).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(ApiResponse::success(serde_json::json!({
+                "message": "Tag removed successfully",
+                "tag": tag
+            }))),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<serde_json::Value>::error(e.to_string())),
+        ).into_response(),
+    }
+}
+
+pub async fn get_process_tags(
+    Extension(process_manager): Extension<Arc<ProcessManager>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let process_id = ProcessId(id.parse().unwrap());
+    
+    match process_manager.get_process(&process_id).await {
+        Ok(info) => (
+            StatusCode::OK,
+            Json(ApiResponse::success(serde_json::json!({
+                "process_id": info.id,
+                "name": info.name,
+                "tags": info.tags
+            }))),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<serde_json::Value>::error(e.to_string())),
+        ).into_response(),
+    }
+}
+
+pub async fn get_all_tags(
+    Extension(process_manager): Extension<Arc<ProcessManager>>,
+) -> impl IntoResponse {
+    match process_manager.list_processes().await {
+        Ok(processes) => {
+            let mut all_tags = std::collections::HashSet::new();
+            for process in processes {
+                all_tags.extend(process.tags);
+            }
+            
+            let mut sorted_tags: Vec<String> = all_tags.into_iter().collect();
+            sorted_tags.sort();
+            
+            (StatusCode::OK, Json(ApiResponse::success(serde_json::json!({
+                "tags": sorted_tags
+            })))).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<serde_json::Value>::error(e.to_string())),
+        ).into_response(),
+    }
 }

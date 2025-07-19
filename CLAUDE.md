@@ -66,12 +66,18 @@ Agent Process Manager (APM) is a standalone Rust service designed for AI-native 
 ### HTTP API (Port 7337)
 ```bash
 # Process Management
-POST   /api/processes              # Spawn new process
-GET    /api/processes              # List all processes
+POST   /api/processes              # Spawn new process (with optional tags)
+GET    /api/processes              # List all processes (supports tag filtering)
 GET    /api/processes/:id          # Get process details
 DELETE /api/processes/:id          # Stop process
 POST   /api/processes/:id/restart  # Restart process
 GET    /api/processes/:id/health   # Get health metrics
+
+# Tag Management
+POST   /api/processes/:id/tags     # Add tag to process
+DELETE /api/processes/:id/tags/:tag # Remove tag from process
+GET    /api/processes/:id/tags     # Get tags for process
+GET    /api/tags                   # Get all unique tags
 
 # Log Access
 GET    /api/logs/:id               # Get logs (with filters)
@@ -100,10 +106,13 @@ APM runs an MCP server by default that AI assistants can connect to:
    - `name`: Process name (required)
    - `command`: Command to execute (required)
    - `args`: Command arguments (optional)
+   - `tags`: List of tags for categorization (optional)
 
 2. **list** - List processes with health metrics
    - `current_dir`: Filter to current directory only (optional, default: false)
-   - Returns: id, name, command, status, session_pid (tmux session), process_pid (application process), process_name (application name), cpu_percent, memory_mb, detected_ports
+   - `tags`: List of tags to filter by (OR logic) (optional)
+   - `all_tags`: List of tags that process must have all of (AND logic) (optional)
+   - Returns: id, name, command, status, session_pid (tmux session), process_pid (application process), process_name (application name), cpu_percent, memory_mb, detected_ports, tags
    - **NEW**: `process_pid` and `process_name` show the real running application inside tmux sessions (e.g., 'node', 'python') rather than just the shell
 
 3. **logs** - Get process logs with filtering
@@ -152,7 +161,13 @@ APM runs an MCP server by default that AI assistants can connect to:
      - `event_types`: Event types for correlation (required for event_correlation)
      - `min_severity`: Minimum severity for process_errors
 
-9. **search** - Full-text search across all process logs (if search is enabled)
+9. **tag** - Manage process tags
+   - `action`: Action to perform - "add", "remove", or "list" (required)
+   - `process_id`: Process ID (required for add/remove, optional for list)
+   - `tag`: Tag to add/remove (required for add/remove)
+   - Returns: Updated tags list or all unique tags across processes
+
+10. **search** - Full-text search across all process logs (if search is enabled)
    - `query`: Lucene-compatible search query (required)
      - Simple: `"error"`, `"database connection"`
      - Boolean: `"error AND timeout"`, `"database OR cache"`, `"error NOT retry"`
@@ -183,8 +198,12 @@ apm status                         # Check daemon status
 
 # Process Management
 apm spawn <name> <command> [args]  # Start a process (uses tmux by default)
+apm spawn <name> <command> --tag tag1 --tag tag2  # Start with tags
 apm list                          # List processes visible from current directory
 apm list --all                    # List all processes regardless of directory
+apm list --tag web --tag api      # List processes with web OR api tags
+apm list --tags-any "backend,db"  # List processes with backend OR db tags
+apm list --tags-all "web,prod"    # List processes with web AND prod tags
 apm logs <name>                   # View process logs (from current directory)
 apm logs <name> --all             # View logs of any process
 apm kill <name>                   # Kill a process (from current directory)
@@ -199,6 +218,12 @@ apm clean --force                 # Clean without confirmation
 apm clean --older-than 24         # Clean processes stopped >24 hours ago
 apm clean --current-dir           # Clean only from current directory
 apm clean --keep-logs             # Clean but preserve log data
+
+# Tag Management
+apm tag add <name> <tag>          # Add tag to process
+apm tag remove <name> <tag>       # Remove tag from process
+apm tag list <name>               # List tags for process
+apm tag all                       # List all unique tags
 
 # Configuration Management
 apm config init                   # Create user config file with defaults
@@ -496,6 +521,16 @@ The MCP interface now provides comprehensive process management capabilities opt
 const processes = await mcp.call('list', {
   current_dir: false
 });
+
+// Filter processes by tags (OR logic)
+const webProcesses = await mcp.call('list', {
+  tags: ['web', 'frontend']
+});
+
+// Filter processes by tags (AND logic)
+const prodWebProcesses = await mcp.call('list', {
+  all_tags: ['web', 'production']
+});
 // Returns processes with process_pid and process_name showing real applications:
 // [
 //   {
@@ -551,6 +586,25 @@ const logs = await mcp.call('logs', {
 const cleaned = await mcp.call('clean', {
   older_than: 24,  // hours
   keep_logs: false
+});
+
+// Spawn process with tags
+const proc = await mcp.call('spawn', {
+  name: 'web-server',
+  command: 'node',
+  args: ['app.js'],
+  tags: ['web', 'production', 'frontend']
+});
+
+// Manage tags
+const updatedTags = await mcp.call('tag', {
+  action: 'add',
+  process_id: proc.id,
+  tag: 'critical'
+});
+
+const allTags = await mcp.call('tag', {
+  action: 'list'
 });
 ```
 
