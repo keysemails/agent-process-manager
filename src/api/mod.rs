@@ -29,6 +29,12 @@ pub fn create_router(
         .route("/api/processes/:id/restart", post(handlers::restart_process))
         .route("/api/processes/:id/health", get(handlers::get_process_health))
         
+        // Tag management
+        .route("/api/processes/:id/tags", post(handlers::add_tag_to_process))
+        .route("/api/processes/:id/tags/:tag", delete(handlers::remove_tag_from_process))
+        .route("/api/processes/:id/tags", get(handlers::get_process_tags))
+        .route("/api/tags", get(handlers::get_all_tags))
+        
         // Log access
         .route("/api/logs/:id", get(handlers::get_logs))
         .route("/api/logs/:id/stream", get(websocket::stream_logs))

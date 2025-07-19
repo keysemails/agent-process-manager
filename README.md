@@ -27,6 +27,7 @@ See [APM for AI Assistants](docs/setup/ai-assistants.md) for detailed instructio
 - 💾 **Dual Log Storage**: Raw logs for humans, structured summaries for AI agents
 - 🤖 **Enhanced AI Agent API**: Structured query system for efficient AI interaction
 - 📈 **Intelligent Summarization**: Error pattern analysis, time-based metrics, and recommendations
+- 🏷️ **Process Tags**: Organize and filter processes with flexible tag-based categorization ([see guide](docs/features/tags.md))
 - 🌐 **REST API**: Full programmatic control
 - 📡 **WebSocket Streaming**: Real-time log monitoring
 - 🖥️ **CLI Interface**: Human-friendly command-line tool
@@ -53,8 +54,26 @@ apm start
 # Spawn a process
 apm spawn my-server python -m http.server 8080
 
+# Spawn with tags for organization
+apm spawn web-app node app.js --tag web --tag frontend --tag production
+
 # List processes
 apm list
+
+# List processes filtered by tags (OR logic)
+apm list --tag web --tag api              # Shows processes with 'web' OR 'api' tags
+
+# List processes with any of the specified tags
+apm list --tags-any "backend,database"     # Shows processes with 'backend' OR 'database' tags
+
+# List processes with all specified tags (AND logic)
+apm list --tags-all "web,production"       # Shows only processes with BOTH 'web' AND 'production' tags
+
+# Manage tags on existing processes
+apm tag add my-server production           # Add a tag to a process
+apm tag remove my-server staging           # Remove a tag from a process
+apm tag list my-server                     # List tags for a specific process
+apm tag all                                # List all unique tags across all processes
 
 # View logs
 apm logs my-server
@@ -96,8 +115,24 @@ curl -X POST http://localhost:7337/api/processes \
     "name": "my-app",
     "command": "node",
     "args": ["app.js"],
+    "tags": ["web", "production"],
     "pty": true
   }'
+
+# List processes filtered by tags
+curl "http://localhost:7337/api/processes?tags=web,api"          # OR logic
+curl "http://localhost:7337/api/processes?all_tags=web,prod"     # AND logic
+
+# Add a tag to a process
+curl -X POST http://localhost:7337/api/processes/<id>/tags \
+  -H "Content-Type: application/json" \
+  -d '{"tag": "critical"}'
+
+# Remove a tag from a process
+curl -X DELETE http://localhost:7337/api/processes/<id>/tags/staging
+
+# Get all unique tags
+curl http://localhost:7337/api/tags
 
 # Get process health
 curl http://localhost:7337/api/processes/<id>/health
@@ -216,10 +251,11 @@ mcp:
 ```
 
 ### Available MCP Tools
-- `spawn`: Start new processes
-- `list`: List all processes with status
+- `spawn`: Start new processes with optional tags
+- `list`: List all processes with status (supports tag filtering)
 - `logs`: Retrieve process logs
 - `stop`: Stop processes
+- `tag`: Manage process tags (add, remove, list)
 - `query`: Execute structured queries (same as AI Agent API)
 
 The MCP server runs alongside the HTTP API when enabled, sharing the same process manager and log storage.

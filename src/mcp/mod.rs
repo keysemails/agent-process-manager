@@ -83,6 +83,17 @@ struct ListArgs {
     cwd: String,
     #[serde(default)]
     current_dir: bool,
+    #[serde(default)]
+    tags: Option<String>,        // comma-separated tags for filtering (OR logic)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TagArgs {
+    cwd: String,
+    process_id: String,
+    operation: String,  // "add", "remove", or "list"
+    #[serde(default)]
+    tag: Option<String>,  // tag to add/remove (not needed for list)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -282,7 +293,7 @@ impl McpServerHandler {
         match self.process_manager.list_processes().await {
             Ok(processes) => {
                 // Filter processes by access group if current_dir is true
-                let filtered_processes: Vec<_> = if args.current_dir {
+                let mut filtered_processes: Vec<_> = if args.current_dir {
                     processes
                         .into_iter()
                         .filter(|p| {
@@ -303,6 +314,17 @@ impl McpServerHandler {
                     processes
                 };
                 
+                // Apply tag filtering if specified
+                if let Some(ref tags_str) = args.tags {
+                    let filter_tags: Vec<&str> = tags_str.split(',').map(|s| s.trim()).collect();
+                    filtered_processes.retain(|p| {
+                        // OR logic: process must have at least one of the filter tags
+                        filter_tags.iter().any(|filter_tag| {
+                            p.tags.iter().any(|process_tag| process_tag == filter_tag)
+                        })
+                    });
+                }
+                
                 let process_list: Vec<Value> = filtered_processes
                     .into_iter()
                     .map(|info| {
@@ -322,7 +344,8 @@ impl McpServerHandler {
                             "cpu_percent": info.cpu_percent,
                             "memory_mb": info.memory_mb,
                             "cwd": info.cwd,
-                            "detected_ports": info.detected_ports
+                            "detected_ports": info.detected_ports,
+                            "tags": info.tags
                         })
                     })
                     .collect();
@@ -910,7 +933,7 @@ impl McpServerHandler {
         Ok(json!({ "errors": all_errors }))
     }
 
-    async fn query_port_mapping(&self, cwd_path: &std::path::Path, include_urls: bool, current_dir: bool) -> Result<Value> {
+    async fn query_port_mapping(&self, _cwd_path: &std::path::Path, include_urls: bool, current_dir: bool) -> Result<Value> {
         let access_group = if current_dir {
             match std::env::current_dir() {
                 Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
@@ -983,7 +1006,7 @@ impl McpServerHandler {
         Ok(data)
     }
 
-    async fn query_performance_metrics(&self, cwd_path: &std::path::Path, process_filter: Option<Vec<String>>, metrics: Vec<String>, current_dir: bool) -> Result<Value> {
+    async fn query_performance_metrics(&self, _cwd_path: &std::path::Path, process_filter: Option<Vec<String>>, metrics: Vec<String>, current_dir: bool) -> Result<Value> {
         let access_group = if current_dir {
             match std::env::current_dir() {
                 Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
@@ -1057,7 +1080,7 @@ impl McpServerHandler {
         }))
     }
 
-    async fn query_log_search(&self, cwd_path: &std::path::Path, pattern: String, process_filter: Option<Vec<String>>, limit: Option<usize>, current_dir: bool) -> Result<Value> {
+    async fn query_log_search(&self, _cwd_path: &std::path::Path, pattern: String, process_filter: Option<Vec<String>>, limit: Option<usize>, current_dir: bool) -> Result<Value> {
         let access_group = if current_dir {
             match std::env::current_dir() {
                 Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
@@ -1133,7 +1156,7 @@ impl McpServerHandler {
         }))
     }
 
-    async fn query_event_correlation(&self, cwd_path: &std::path::Path, event_types: Vec<String>, time_window: Option<String>, current_dir: bool) -> Result<Value> {
+    async fn query_event_correlation(&self, _cwd_path: &std::path::Path, event_types: Vec<String>, time_window: Option<String>, current_dir: bool) -> Result<Value> {
         let access_group = if current_dir {
             match std::env::current_dir() {
                 Ok(cwd) => Some(crate::utils::access_group_from_dir(&cwd)),
@@ -1200,6 +1223,95 @@ impl McpServerHandler {
             "event_types": event_types,
             "time_window": time_window.as_deref().unwrap_or("all_time"),
         }))
+    }
+
+    async fn handle_tag(&self, args: TagArgs) -> CallToolResult {
+        debug!("MCP tag tool called: {:?}", args);
+
+        let process_id = match args.process_id.parse() {
+            Ok(id) => ProcessId(id),
+            Err(_) => {
+                return Self::create_error_result("Invalid process ID".to_string());
+            }
+        };
+
+        // Parse the provided working directory for access control
+        let cwd_path = match std::path::PathBuf::from(&args.cwd).canonicalize() {
+            Ok(path) => path,
+            Err(e) => {
+                return Self::create_error_result(format!("Invalid working directory '{}': {}", args.cwd, e));
+            }
+        };
+        let access_group = Some(crate::utils::access_group_from_dir(&cwd_path));
+
+        // Check if process exists and is accessible
+        match self.process_manager.get_process(&process_id).await {
+            Ok(process_info) => {
+                // Check access permissions using configurable write access for add/remove operations
+                let is_write_operation = matches!(args.operation.as_str(), "add" | "remove");
+                if !crate::utils::check_access(
+                    access_group.as_deref(),
+                    process_info.access_group.as_deref(),
+                    is_write_operation,
+                    &self.config.access_control.mode
+                ) {
+                    return Self::create_error_result(format!("Access denied: process '{}' is not accessible from this directory", process_id));
+                }
+
+                match args.operation.as_str() {
+                    "add" => {
+                        if let Some(tag) = args.tag {
+                            match self.process_manager.add_tag(&process_id, &tag).await {
+                                Ok(()) => {
+                                    let response = json!({
+                                        "success": true,
+                                        "message": format!("Added tag '{}' to process '{}'", tag, process_info.name),
+                                        "process_id": process_id.to_string(),
+                                        "tag": tag
+                                    });
+                                    Self::create_success_result(response.to_string())
+                                }
+                                Err(e) => Self::create_error_result(format!("Failed to add tag: {}", e))
+                            }
+                        } else {
+                            Self::create_error_result("Tag name is required for add operation".to_string())
+                        }
+                    }
+                    "remove" => {
+                        if let Some(tag) = args.tag {
+                            match self.process_manager.remove_tag(&process_id, &tag).await {
+                                Ok(()) => {
+                                    let response = json!({
+                                        "success": true,
+                                        "message": format!("Removed tag '{}' from process '{}'", tag, process_info.name),
+                                        "process_id": process_id.to_string(),
+                                        "tag": tag
+                                    });
+                                    Self::create_success_result(response.to_string())
+                                }
+                                Err(e) => Self::create_error_result(format!("Failed to remove tag: {}", e))
+                            }
+                        } else {
+                            Self::create_error_result("Tag name is required for remove operation".to_string())
+                        }
+                    }
+                    "list" => {
+                        let response = json!({
+                            "success": true,
+                            "process_id": process_id.to_string(),
+                            "process_name": process_info.name,
+                            "tags": process_info.tags
+                        });
+                        Self::create_success_result(response.to_string())
+                    }
+                    _ => Self::create_error_result(format!("Unknown tag operation: {}", args.operation))
+                }
+            }
+            Err(e) => {
+                error!("Failed to get process for tag operation: {}", e);
+                Self::create_error_result(format!("Process not found: {}", e))
+            }
+        }
     }
 }
 
@@ -1286,7 +1398,7 @@ Common search patterns:
             },
             Tool {
                 name: Cow::Borrowed("list"),
-                description: Some(Cow::Borrowed("List processes with health metrics. Returns: id, name, command, status, session_pid (tmux session), process_pid (application process), process_name (application name), cpu_percent, memory_mb, detected_ports. The process_pid and process_name fields show the real running application inside tmux sessions (e.g., 'node', 'python') rather than just the shell.")),
+                description: Some(Cow::Borrowed("List processes with health metrics. Returns: id, name, command, status, session_pid (tmux session), process_pid (application process), process_name (application name), cpu_percent, memory_mb, detected_ports, tags. The process_pid and process_name fields show the real running application inside tmux sessions (e.g., 'node', 'python') rather than just the shell.")),
                 input_schema: Arc::new(serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
@@ -1298,6 +1410,10 @@ Common search patterns:
                             "type": "boolean",
                             "description": "Filter to only show processes from current directory",
                             "default": false
+                        },
+                        "tags": {
+                            "type": "string",
+                            "description": "Comma-separated list of tags to filter by (OR logic - process must have at least one of these tags)"
                         }
                     },
                     "required": ["cwd"]
@@ -1549,6 +1665,34 @@ Example: Find all database connection errors in the last hour across all process
                 })).unwrap()),
                 annotations: None,
             },
+            Tool {
+                name: Cow::Borrowed("tag"),
+                description: Some(Cow::Borrowed("Manage tags for a process. Operations: 'add' - add a tag, 'remove' - remove a tag, 'list' - show all tags for a process")),
+                input_schema: Arc::new(serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Client's current working directory (required for access control)"
+                        },
+                        "process_id": {
+                            "type": "string",
+                            "description": "Process ID to manage tags for"
+                        },
+                        "operation": {
+                            "type": "string",
+                            "enum": ["add", "remove", "list"],
+                            "description": "Tag operation to perform"
+                        },
+                        "tag": {
+                            "type": "string",
+                            "description": "Tag name (required for add/remove operations, not needed for list)"
+                        }
+                    },
+                    "required": ["cwd", "process_id", "operation"]
+                })).unwrap()),
+                annotations: None,
+            },
         ];
 
         Ok(ListToolsResult {
@@ -1656,6 +1800,16 @@ Example: Find all database connection errors in the last hour across all process
                     return Ok(Self::create_error_result("Missing search arguments".to_string()));
                 };
                 self.handle_search(args).await
+            }
+            "tag" => {
+                let args: TagArgs = if let Some(args) = request.arguments {
+                    serde_json::from_value(serde_json::Value::Object(args)).map_err(|e| {
+                        McpError::invalid_params(format!("Invalid tag arguments: {}", e), None)
+                    })?
+                } else {
+                    return Ok(Self::create_error_result("Missing tag arguments".to_string()));
+                };
+                self.handle_tag(args).await
             }
             _ => Self::create_error_result(format!("Unknown tool: {}", request.name)),
         };

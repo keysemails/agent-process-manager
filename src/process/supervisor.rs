@@ -999,4 +999,63 @@ impl ProcessManager {
         }
         Ok(())
     }
+
+    // Tag management methods
+    pub async fn add_tag(&self, id: &ProcessId, tag: &str) -> Result<()> {
+        // Get the existing process record
+        let mut process_record = self.storage.get_process(id).await?
+            .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
+        
+        // Validate tag
+        if tag.is_empty() || tag.len() > 50 {
+            return Err(ApmError::InvalidInput("Tag must be 1-50 characters".to_string()));
+        }
+        
+        // Only allow alphanumeric, dash, underscore, dot
+        if !tag.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+            return Err(ApmError::InvalidInput("Tag can only contain alphanumeric characters, dash, underscore, and dot".to_string()));
+        }
+        
+        // Add tag if not already present
+        if !process_record.config.tags.contains(&tag.to_string()) {
+            process_record.config.tags.push(tag.to_string());
+            
+            // Update process in storage
+            self.storage.store_process(
+                id,
+                &process_record.config.name,
+                &process_record.config.command,
+                &process_record.config.args,
+                process_record.status,
+                &process_record.config,
+                process_record.tmux_session.as_deref()
+            ).await?;
+        }
+        
+        Ok(())
+    }
+    
+    pub async fn remove_tag(&self, id: &ProcessId, tag: &str) -> Result<()> {
+        // Get the existing process record
+        let mut process_record = self.storage.get_process(id).await?
+            .ok_or_else(|| ApmError::NotFound(format!("Process {} not found", id)))?;
+        
+        // Remove tag if present
+        if let Some(pos) = process_record.config.tags.iter().position(|t| t == tag) {
+            process_record.config.tags.remove(pos);
+            
+            // Update process in storage
+            self.storage.store_process(
+                id,
+                &process_record.config.name,
+                &process_record.config.command,
+                &process_record.config.args,
+                process_record.status,
+                &process_record.config,
+                process_record.tmux_session.as_deref()
+            ).await?;
+        }
+        
+        Ok(())
+    }
 }

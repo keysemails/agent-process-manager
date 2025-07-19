@@ -433,6 +433,7 @@ impl LogStorage {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
+                config = excluded.config,
                 tmux_session = excluded.tmux_session,
                 access_group = excluded.access_group,
                 updated_at = CURRENT_TIMESTAMP

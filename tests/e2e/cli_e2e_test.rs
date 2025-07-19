@@ -1,7 +1,6 @@
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use serial_test::serial;
-use tempfile::TempDir;
 use tokio::time::sleep;
 
 fn apm_cmd() -> Command {
@@ -45,6 +44,204 @@ async fn test_daemon_lifecycle() {
     assert!(status_str.contains("running") || status_str.contains("APM daemon is running"));
     
     // Kill daemon
+    daemon.kill().expect("Failed to kill daemon");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_spawn_with_tags() {
+    kill_daemon();
+    
+    // Start daemon
+    let mut start_cmd = apm_cmd();
+    start_cmd.arg("start");
+    start_cmd.stdout(Stdio::null());
+    start_cmd.stderr(Stdio::null());
+    
+    let mut daemon = start_cmd.spawn().expect("Failed to start daemon");
+    
+    // Wait for daemon to start
+    sleep(Duration::from_secs(2)).await;
+    
+    // Spawn process with tags
+    let spawn_output = apm_cmd()
+        .args(&["spawn", "test-tagged", "echo", "hello", "--tag", "web", "--tag", "test"])
+        .output()
+        .expect("Failed to spawn process");
+    
+    if !spawn_output.status.success() {
+        eprintln!("Spawn failed with stderr: {}", String::from_utf8_lossy(&spawn_output.stderr));
+        eprintln!("Spawn failed with stdout: {}", String::from_utf8_lossy(&spawn_output.stdout));
+    }
+    assert!(spawn_output.status.success());
+    let output_str = String::from_utf8_lossy(&spawn_output.stdout);
+    assert!(output_str.contains("Spawned process"));
+    
+    // List processes to verify tags
+    let list_output = apm_cmd()
+        .args(&["list"])
+        .output()
+        .expect("Failed to list processes");
+    
+    let list_str = String::from_utf8_lossy(&list_output.stdout);
+    assert!(list_str.contains("test-tagged"));
+    assert!(list_str.contains("web,test") || list_str.contains("test,web"));
+    
+    // Clean up
+    let _ = apm_cmd()
+        .args(&["kill", "test-tagged"])
+        .output();
+    
+    daemon.kill().expect("Failed to kill daemon");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_list_with_tag_filters() {
+    kill_daemon();
+    
+    // Start daemon
+    let mut start_cmd = apm_cmd();
+    start_cmd.arg("start");
+    start_cmd.stdout(Stdio::null());
+    start_cmd.stderr(Stdio::null());
+    
+    let mut daemon = start_cmd.spawn().expect("Failed to start daemon");
+    
+    // Wait for daemon to start
+    sleep(Duration::from_secs(2)).await;
+    
+    // Spawn multiple processes with different tags
+    let _ = apm_cmd()
+        .args(&["spawn", "web-app", "echo", "web", "--tag", "web", "--tag", "frontend"])
+        .output();
+    
+    let _ = apm_cmd()
+        .args(&["spawn", "api-server", "echo", "api", "--tag", "api", "--tag", "backend"])
+        .output();
+    
+    let _ = apm_cmd()
+        .args(&["spawn", "db-server", "echo", "db", "--tag", "database", "--tag", "backend"])
+        .output();
+    
+    sleep(Duration::from_millis(500)).await;
+    
+    // Test --tag filter (OR logic)
+    let list_output = apm_cmd()
+        .args(&["list", "--tag", "web", "--tag", "api"])
+        .output()
+        .expect("Failed to list with tag filter");
+    
+    let list_str = String::from_utf8_lossy(&list_output.stdout);
+    assert!(list_str.contains("web-app"));
+    assert!(list_str.contains("api-server"));
+    assert!(!list_str.contains("db-server"));
+    
+    // Test --tags-any filter
+    let list_output = apm_cmd()
+        .args(&["list", "--tags-any", "backend"])
+        .output()
+        .expect("Failed to list with tags-any filter");
+    
+    let list_str = String::from_utf8_lossy(&list_output.stdout);
+    assert!(!list_str.contains("web-app"));
+    assert!(list_str.contains("api-server"));
+    assert!(list_str.contains("db-server"));
+    
+    // Test --tags-all filter
+    let list_output = apm_cmd()
+        .args(&["list", "--tags-all", "database,backend"])
+        .output()
+        .expect("Failed to list with tags-all filter");
+    
+    let list_str = String::from_utf8_lossy(&list_output.stdout);
+    assert!(!list_str.contains("web-app"));
+    assert!(!list_str.contains("api-server"));
+    assert!(list_str.contains("db-server"));
+    
+    // Clean up
+    let _ = apm_cmd().args(&["kill-all", "--force"]).output();
+    
+    daemon.kill().expect("Failed to kill daemon");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_tag_management_commands() {
+    kill_daemon();
+    
+    // Start daemon
+    let mut start_cmd = apm_cmd();
+    start_cmd.arg("start");
+    start_cmd.stdout(Stdio::null());
+    start_cmd.stderr(Stdio::null());
+    
+    let mut daemon = start_cmd.spawn().expect("Failed to start daemon");
+    
+    // Wait for daemon to start
+    sleep(Duration::from_secs(2)).await;
+    
+    // Spawn a process with initial tag
+    let _ = apm_cmd()
+        .args(&["spawn", "test-process", "echo", "test", "--tag", "initial"])
+        .output();
+    
+    sleep(Duration::from_millis(500)).await;
+    
+    // Add a tag
+    let add_output = apm_cmd()
+        .args(&["tag", "add", "test-process", "new-tag"])
+        .output()
+        .expect("Failed to add tag");
+    
+    assert!(add_output.status.success());
+    let output_str = String::from_utf8_lossy(&add_output.stdout);
+    assert!(output_str.contains("Added tag"));
+    
+    // List tags for process
+    let list_output = apm_cmd()
+        .args(&["tag", "list", "test-process"])
+        .output()
+        .expect("Failed to list tags");
+    
+    let list_str = String::from_utf8_lossy(&list_output.stdout);
+    assert!(list_str.contains("initial"));
+    assert!(list_str.contains("new-tag"));
+    
+    // Remove a tag
+    let remove_output = apm_cmd()
+        .args(&["tag", "remove", "test-process", "initial"])
+        .output()
+        .expect("Failed to remove tag");
+    
+    assert!(remove_output.status.success());
+    let output_str = String::from_utf8_lossy(&remove_output.stdout);
+    assert!(output_str.contains("Removed tag"));
+    
+    // Verify tag was removed
+    let list_output = apm_cmd()
+        .args(&["tag", "list", "test-process"])
+        .output()
+        .expect("Failed to list tags");
+    
+    let list_str = String::from_utf8_lossy(&list_output.stdout);
+    assert!(!list_str.contains("initial"));
+    assert!(list_str.contains("new-tag"));
+    
+    // Test 'tag all' command
+    let all_output = apm_cmd()
+        .args(&["tag", "all"])
+        .output()
+        .expect("Failed to list all tags");
+    
+    let all_str = String::from_utf8_lossy(&all_output.stdout);
+    assert!(all_str.contains("new-tag"));
+    
+    // Clean up
+    let _ = apm_cmd()
+        .args(&["kill", "test-process"])
+        .output();
+    
     daemon.kill().expect("Failed to kill daemon");
 }
 
