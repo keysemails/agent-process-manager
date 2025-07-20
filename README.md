@@ -35,9 +35,43 @@ See [APM for AI Assistants](docs/setup/ai-assistants.md) for detailed instructio
 
 ## Installation
 
+### Quick Install (Recommended)
+
+```bash
+# Install latest version
+curl -sSL https://raw.githubusercontent.com/sunnya97/agent-process-manager/main/install.sh | bash
+
+# Or install specific version
+curl -sSL https://raw.githubusercontent.com/sunnya97/agent-process-manager/main/install.sh | bash -s v0.3.0
+```
+
+### Manual Download
+
+Download the latest binary for your platform from the [releases page](https://github.com/sunnya97/agent-process-manager/releases).
+
+#### Linux x64
+```bash
+curl -sSL https://github.com/sunnya97/agent-process-manager/releases/latest/download/apm-linux-x64 -o /usr/local/bin/apm
+chmod +x /usr/local/bin/apm
+```
+
+#### macOS x64
+```bash
+curl -sSL https://github.com/sunnya97/agent-process-manager/releases/latest/download/apm-macos-x64 -o /usr/local/bin/apm
+chmod +x /usr/local/bin/apm
+```
+
+#### macOS ARM64 (M1/M2)
+```bash
+curl -sSL https://github.com/sunnya97/agent-process-manager/releases/latest/download/apm-macos-arm64 -o /usr/local/bin/apm
+chmod +x /usr/local/bin/apm
+```
+
+### Build from Source
+
 ```bash
 # Clone and build
-git clone <repository>
+git clone https://github.com/sunnya97/agent-process-manager
 cd agent-process-manager
 cargo build --release
 
