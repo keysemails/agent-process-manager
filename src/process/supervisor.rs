@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 fn default_true() -> bool {
     true
@@ -186,6 +186,7 @@ impl ProcessManager {
                 // Get all running processes
                 if let Ok(processes) = storage.list_processes(Some(ProcessStatus::Running)).await {
                     for process in processes {
+                        
                         // Skip if no PID
                         if let Some(session_pid) = process.session_pid {
                             // Check health status
@@ -315,7 +316,6 @@ impl ProcessManager {
         tokio::spawn(async move {
             loop {
                 // Update health metrics every 2 seconds
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 health_monitor.update_health(&process_id, pid).await;
                 
                 // Check if process is still alive
@@ -326,6 +326,8 @@ impl ProcessManager {
                         break;
                     }
                 }
+                
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             }
         });
     }
@@ -340,9 +342,6 @@ impl ProcessManager {
             let mut last_actual_pid: Option<u32> = None;
             
             loop {
-                // Update health metrics every 2 seconds
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                
                 // Refresh process information
                 system.refresh_processes(sysinfo::ProcessesToUpdate::All);
                 
@@ -378,6 +377,9 @@ impl ProcessManager {
                         break;
                     }
                 }
+                
+                // Update health metrics every 2 seconds
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             }
         });
     }
@@ -635,30 +637,71 @@ impl ProcessManager {
                 let mut last_actual_pid: Option<u32> = None;
                 
                 loop {
-                    // First, check for file markers (instant detection)
-                    let exit_marker_path = format!("/tmp/apm-{}.exited", session);
-                    if std::path::Path::new(&exit_marker_path).exists() && !process_exit_detected {
-                        info!("Exit marker detected for process {} in tmux session {}", process_id, session);
-                        process_exit_detected = true;
+                    // First, check if tmux session still exists
+                    if !TmuxManager::session_exists(&session) {
+                        info!("Tmux session {} for process {} has ended", session, process_id);
                         
-                        // Try to read exit code
-                        let exit_code_path = format!("/tmp/apm-{}.exit-code", session);
-                        let exit_code = std::fs::read_to_string(&exit_code_path)
-                            .ok()
-                            .and_then(|s| s.trim().parse::<i32>().ok());
-                        
-                        if let Some(code) = exit_code {
-                            info!("Process {} exited with code {}", process_id, code);
+                        // Try to get exit status from tmux if we haven't detected exit yet
+                        if !process_exit_detected {
+                            match TmuxManager::get_pane_exit_status(&session) {
+                                Ok(Some(exit_code)) => {
+                                    info!("Process {} exited with code {}", process_id, exit_code);
+                                    let final_status = if exit_code == 0 {
+                                        ProcessStatus::Stopped
+                                    } else {
+                                        ProcessStatus::Failed
+                                    };
+                                    let _ = storage.update_process_status(&process_id, final_status, None).await;
+                                }
+                                _ => {
+                                    // Session was killed or terminated abnormally
+                                    info!("Process {} was killed or terminated abnormally", process_id);
+                                    let _ = storage.update_process_status(&process_id, ProcessStatus::Killed, None).await;
+                                }
+                            }
                         }
+                        break;
+                    }
+                    
+                    // Check if we have an actual process PID to monitor
+                    if let Some(actual_pid) = last_actual_pid {
+                        // Use kill(0) to check if process exists
+                        use nix::sys::signal::{kill, Signal};
+                        use nix::unistd::Pid;
                         
-                        // Update process status to stopped (natural exit)
-                        let _ = storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await;
-                        
-                        // Clean up marker files
-                        let _ = std::fs::remove_file(&exit_marker_path);
-                        let _ = std::fs::remove_file(&exit_code_path);
-                        
-                        // Continue monitoring until session is actually closed
+                        match kill(Pid::from_raw(actual_pid as i32), Signal::SIGCONT) {
+                            Ok(_) => {
+                                debug!("Process {} (PID {}) is still running", process_id, actual_pid);
+                            }
+                            Err(nix::errno::Errno::ESRCH) => {
+                                // Process doesn't exist
+                                if !process_exit_detected {
+                                    info!("Process {} (PID {}) no longer exists", process_id, actual_pid);
+                                    process_exit_detected = true;
+                                    
+                                    // Process has exited, mark as stopped (we'll determine exit code later)
+                                    let _ = storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await;
+                                }
+                            }
+                            Err(e) => {
+                                // Other error (e.g., no permission)
+                                debug!("Error checking process {}: {}", actual_pid, e);
+                            }
+                        }
+                    } else {
+                        // No actual PID found (likely a short-lived command)
+                        // Check if the pane is idle (bash at prompt)
+                        if !process_exit_detected {
+                            if let Ok(is_idle) = TmuxManager::is_pane_idle(&session) {
+                                if is_idle {
+                                    info!("Process {} completed (pane is idle)", process_id);
+                                    process_exit_detected = true;
+                                    
+                                    // Mark as stopped - assume success for short commands
+                                    let _ = storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await;
+                                }
+                            }
+                        }
                     }
                     
                     // Update actual command PID tracking
@@ -679,35 +722,6 @@ impl ProcessManager {
                     // Sleep before next check
                     tokio::time::sleep(check_interval).await;
                     
-                    // Check if session still exists
-                    if !TmuxManager::session_exists(&session) {
-                        info!("Tmux session {} for process {} has ended", session, process_id);
-                        // Update process status - if exit marker existed, it's Stopped, otherwise Killed
-                        let final_status = if process_exit_detected {
-                            ProcessStatus::Stopped
-                        } else {
-                            ProcessStatus::Killed
-                        };
-                        let _ = storage.update_process_status(&process_id, final_status, None).await;
-                        break;
-                    }
-                    
-                    // Fallback: check tmux pane content if no marker found
-                    if !process_exit_detected {
-                        use crate::tmux::TmuxManager;
-                        if let Ok(pane_content) = TmuxManager::capture_pane(&session, false) {
-                            // Check for common exit patterns
-                            if pane_content.contains("Process exited with code") ||
-                               pane_content.contains("Press enter to close session") ||
-                               pane_content.ends_with("exit\n") {
-                                info!("Process {} has exited within tmux session {} (detected via pane content)", process_id, session);
-                                process_exit_detected = true;
-                                // Update process status to stopped
-                                let _ = storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await;
-                                // Continue monitoring until session is actually closed
-                            }
-                        }
-                    }
                 }
             });
             return;
@@ -843,20 +857,66 @@ impl ProcessManager {
         // Update status to stopping
         self.storage.update_process_status(id, ProcessStatus::Stopping, process_record.session_pid).await?;
 
-        // Handle tmux session termination
+        // Handle tmux session termination with proper process tree cleanup
         if let Some(tmux_session) = &process_record.tmux_session {
             use crate::tmux::TmuxManager;
+            
+            // First, try to get the shell PID from tmux
+            if let Ok(shell_pid) = TmuxManager::get_session_pid(tmux_session) {
+                // Find all child processes before killing the session
+                let mut system = sysinfo::System::new();
+                system.refresh_processes(sysinfo::ProcessesToUpdate::All);
+                
+                // Get all descendants of the shell process
+                let descendants = crate::process::tree::find_all_descendants(&system, shell_pid);
+                
+                if !descendants.is_empty() {
+                    info!("Found {} child processes for tmux session {}", descendants.len(), tmux_session);
+                    
+                    // Kill all descendants first (in reverse order to kill children before parents)
+                    use nix::sys::signal::{self, Signal};
+                    use nix::unistd::Pid;
+                    
+                    for child_pid in descendants.iter().rev() {
+                        debug!("Killing child process {}", child_pid);
+                        let _ = signal::kill(Pid::from_raw(*child_pid as i32), Signal::SIGTERM);
+                    }
+                    
+                    // Give processes a moment to clean up
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    
+                    // Force kill any remaining processes
+                    for child_pid in descendants.iter().rev() {
+                        let _ = signal::kill(Pid::from_raw(*child_pid as i32), Signal::SIGKILL);
+                    }
+                }
+            }
+            
+            // Now kill the tmux session
             TmuxManager::kill_session(tmux_session)?;
         } else if let Some(pid) = process_record.session_pid {
-            // For non-tmux processes, try to kill by PID
-            use std::process::Command;
-            let _ = Command::new("kill")
-                .arg(pid.to_string())
-                .output();
+            // For non-tmux processes, kill the process tree
+            let mut system = sysinfo::System::new();
+            system.refresh_processes(sysinfo::ProcessesToUpdate::All);
+            
+            // Get all descendants
+            let descendants = crate::process::tree::find_all_descendants(&system, pid);
+            
+            // Kill all processes in the tree
+            use nix::sys::signal::{self, Signal};
+            use nix::unistd::Pid;
+            
+            // Kill children first
+            for child_pid in descendants.iter().rev() {
+                let _ = signal::kill(Pid::from_raw(*child_pid as i32), Signal::SIGTERM);
+            }
+            
+            // Then kill the main process
+            let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
         }
 
-        // Update status to stopped
-        self.storage.update_process_status(id, ProcessStatus::Stopped, process_record.session_pid).await?;
+        // Update status to killed (not stopped, since we forcefully killed it)
+        self.storage.update_process_status(id, ProcessStatus::Killed, process_record.session_pid).await?;
         
         // Remove from health monitor
         self.health_monitor.remove_process(id).await;

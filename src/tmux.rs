@@ -75,13 +75,28 @@ fn create_temp_script(
     }
     
     // Add the main command using exec array approach
-    script_content.push_str("exec");
-    script_content.push(' ');
-    script_content.push_str(&shell_quote(command));
+    // Write the command directly - bash will handle the execution
+    script_content.push_str("exec ");
+    script_content.push_str(command);
     
     for arg in args {
         script_content.push(' ');
-        script_content.push_str(&shell_quote(arg));
+        // Only quote arguments that contain spaces or special shell characters
+        if arg.contains(' ') || arg.contains('\'') || arg.contains('"') || 
+           arg.contains('$') || arg.contains('`') || arg.contains('\\') ||
+           arg.contains('(') || arg.contains(')') || arg.contains(';') ||
+           arg.contains('&') || arg.contains('|') || arg.contains('<') ||
+           arg.contains('>') || arg.contains('*') || arg.contains('?') {
+            // Use double quotes and escape necessary characters within
+            let escaped = arg
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('$', "\\$")
+                .replace('`', "\\`");
+            script_content.push_str(&format!("\"{}\"", escaped));
+        } else {
+            script_content.push_str(arg);
+        }
     }
     
     script_content.push('\n');
@@ -180,26 +195,17 @@ impl TmuxManager {
             // Create temporary script file
             let script_path = create_temp_script(session_name, command, args, env)?;
             
-            // Return script execution command with cleanup and exit markers
-            // Use trap to ensure exit markers are created even on interrupt
-            format!("trap 'EXIT_CODE=$?; echo \"Process exited with code $EXIT_CODE\"; echo $EXIT_CODE > /tmp/apm-{}.exit-code; touch /tmp/apm-{}.exited; rm -f {}; exit $EXIT_CODE' EXIT INT TERM; {} ; read -p 'Press enter to close session'", 
-                session_name,
-                session_name,
+            // Return script execution command with cleanup
+            format!("trap 'rm -f {}' EXIT INT TERM; {}", 
                 shell_quote(&script_path.to_string_lossy()),
                 shell_quote(&script_path.to_string_lossy()))
         } else {
             // Use traditional approach for simple commands
-            // Set up trap to ensure exit markers are created even on interrupt
-            let trap_cmd = format!("trap 'EXIT_CODE=$?; echo \"Process exited with code $EXIT_CODE\"; echo $EXIT_CODE > /tmp/apm-{}.exit-code; touch /tmp/apm-{}.exited; exit $EXIT_CODE' EXIT INT TERM", 
-                session_name, session_name);
-            
             if args.is_empty() {
-                format!("{} ; {} ; read -p 'Press enter to close session'", 
-                    trap_cmd, shell_quote(command))
+                shell_quote(command)
             } else {
                 let quoted_args: Vec<String> = args.iter().map(|arg| shell_quote(arg)).collect();
-                format!("{} ; {} {} ; read -p 'Press enter to close session'", 
-                    trap_cmd, shell_quote(command), quoted_args.join(" "))
+                format!("{} {}", shell_quote(command), quoted_args.join(" "))
             }
         };
         
@@ -503,6 +509,91 @@ impl TmuxManager {
                 Err(ApmError::ProcessError(format!("Failed to list sessions: {}", stderr)))
             }
         }
+    }
+    
+    /// Get the exit status of a pane using tmux's pane_dead_status
+    /// This directly queries tmux for the exit code of a dead pane
+    pub fn get_pane_exit_status(session_name: &str) -> Result<Option<i32>, ApmError> {
+        // First check if the session exists
+        if !Self::session_exists(session_name) {
+            return Ok(None);
+        }
+        
+        // Query tmux for both pane_dead and pane_dead_status
+        let output = Command::new("tmux")
+            .args(&[
+                "display-message",
+                "-p",
+                "-t", &format!("{}:0.0", session_name),
+                "#{pane_dead} #{pane_dead_status}"
+            ])
+            .output()
+            .map_err(|e| ApmError::ProcessError(format!("Failed to get pane status: {}", e)))?;
+        
+        if !output.status.success() {
+            // Session might have been killed
+            return Ok(None);
+        }
+        
+        let status_str = String::from_utf8_lossy(&output.stdout);
+        let status_str = status_str.trim();
+        
+        // Parse the output: "dead_flag exit_code"
+        let parts: Vec<&str> = status_str.split_whitespace().collect();
+        
+        if parts.is_empty() {
+            // No output, pane might be in weird state
+            return Ok(None);
+        }
+        
+        // First part is pane_dead (0 = alive, 1 = dead)
+        let is_dead = parts[0] == "1";
+        
+        if !is_dead {
+            // Pane is still alive
+            return Ok(None);
+        }
+        
+        // Pane is dead, get exit code from second part
+        if parts.len() > 1 {
+            match parts[1].parse::<i32>() {
+                Ok(code) => Ok(Some(code)),
+                Err(_) => Ok(Some(1)), // Default to 1 if can't parse
+            }
+        } else {
+            // Dead but no exit code, default to 1
+            Ok(Some(1))
+        }
+    }
+    
+    
+    /// Check if the pane is idle (bash at prompt)
+    pub fn is_pane_idle(session_name: &str) -> Result<bool, ApmError> {
+        // Check if session exists first
+        if !Self::session_exists(session_name) {
+            return Ok(false);
+        }
+        
+        // Get the current command in the pane
+        let output = Command::new("tmux")
+            .args(&[
+                "display-message",
+                "-p",
+                "-t", &format!("{}:0.0", session_name),
+                "#{pane_current_command}"
+            ])
+            .output()
+            .map_err(|e| ApmError::ProcessError(format!("Failed to get pane command: {}", e)))?;
+        
+        if !output.status.success() {
+            return Ok(false);
+        }
+        
+        let cmd = String::from_utf8_lossy(&output.stdout);
+        let cmd = cmd.trim();
+        
+        // If the current command is bash/sh, the pane is idle
+        Ok(matches!(cmd, "bash" | "sh" | "zsh" | "fish" | "ksh" | "tcsh" | "csh" | "dash"))
     }
 }
 

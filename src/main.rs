@@ -466,6 +466,18 @@ async fn list_all_tags_cli() -> anyhow::Result<()> {
 }
 
 async fn get_process_id_by_name(client: &reqwest::Client, process_name: &str, all: bool) -> anyhow::Result<String> {
+    // Parse process_name to check for PID reference format (name@pid)
+    let (name_to_match, pid_to_match) = if let Some(at_pos) = process_name.find('@') {
+        let name = &process_name[..at_pos];
+        let pid_str = &process_name[at_pos + 1..];
+        match pid_str.parse::<u32>() {
+            Ok(pid) => (Some(name), Some(pid)),
+            Err(_) => (None, None), // Invalid PID format, treat whole string as name
+        }
+    } else {
+        (None, None)
+    };
+    
     // Load config for access control settings
     let config = match Config::load() {
         Ok(config) => config,
@@ -515,9 +527,15 @@ async fn get_process_id_by_name(client: &reqwest::Client, process_name: &str, al
                     return false;
                 }
                 
-                // Check name match (support both ID and name)
-                process["name"].as_str() == Some(process_name) || 
-                process["id"].as_str() == Some(process_name)
+                // If we have name@pid format, match both name and pid
+                if let (Some(name), Some(pid)) = (name_to_match, pid_to_match) {
+                    process["name"].as_str() == Some(name) && 
+                    process["session_pid"].as_u64() == Some(pid as u64)
+                } else {
+                    // Original matching logic (support both ID and name)
+                    process["name"].as_str() == Some(process_name) || 
+                    process["id"].as_str() == Some(process_name)
+                }
             })
             .collect();
         
@@ -525,9 +543,13 @@ async fn get_process_id_by_name(client: &reqwest::Client, process_name: &str, al
             0 => Err(anyhow::anyhow!("Process '{}' not found", process_name)),
             1 => Ok(matches[0]["id"].as_str().unwrap().to_string()),
             _ => {
-                eprintln!("Multiple processes found with name '{}'. Use process ID instead:", process_name);
+                eprintln!("Multiple processes found with name '{}'. Use process ID or name@pid instead:", process_name);
                 for process in matches {
-                    eprintln!("  - {} ({})", process["name"].as_str().unwrap_or("unknown"), process["id"].as_str().unwrap_or("unknown"));
+                    let name = process["name"].as_str().unwrap_or("unknown");
+                    let id = process["id"].as_str().unwrap_or("unknown");
+                    let pid = process["session_pid"].as_u64().unwrap_or(0);
+                    eprintln!("  - {} (ID: {}, PID: {})", name, id, pid);
+                    eprintln!("    Use: {} or {}@{}", id, name, pid);
                 }
                 Err(anyhow::anyhow!("Ambiguous process name"))
             }
@@ -1255,31 +1277,15 @@ async fn attach_to_process_cli(name: String, read_only: bool) -> anyhow::Result<
     
     let client = reqwest::Client::new();
     
-    // First, get the process ID from the name
-    let processes_response = client
-        .get("http://localhost:7337/api/processes")
-        .send()
-        .await?;
-    
-    if !processes_response.status().is_success() {
-        eprintln!("Failed to list processes: {}", processes_response.text().await?);
-        return Ok(());
-    }
-    
-    let processes: serde_json::Value = processes_response.json().await?;
-    let process_info = if let Some(data) = processes["data"].as_array() {
-        data.iter()
-            .find(|p| p["name"].as_str() == Some(&name) || p["id"].as_str() == Some(&name))
-    } else {
-        None
+    // Use get_process_id_by_name which now supports name@pid format
+    let id = match get_process_id_by_name(&client, &name, false).await {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
     };
     
-    let Some(process) = process_info else {
-        eprintln!("Error: Process '{}' not found", name);
-        std::process::exit(1);
-    };
-    
-    let id = process["id"].as_str().unwrap();
     let session_name = format!("apm-{}", id);
     
     // Check if tmux session exists

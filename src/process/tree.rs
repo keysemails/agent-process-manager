@@ -215,11 +215,11 @@ mod tests {
     #[test]
     fn test_calculate_process_priority() {
         // Regular command should have higher priority than temp script
-        assert!(calculate_process_priority("node", &["node".to_string(), "app.js".to_string()]) > 
-                calculate_process_priority("apm-script-123", &["/tmp/apm-script-123.sh".to_string()]));
+        assert!(calculate_process_priority("node", &["node".into(), "app.js".into()]) > 
+                calculate_process_priority("apm-script-123", &["/tmp/apm-script-123.sh".into()]));
         
         // Helper processes should have lower priority
-        assert!(calculate_process_priority("python", &["python".to_string()]) > 
-                calculate_process_priority("sleep", &["sleep".to_string(), "10".to_string()]));
+        assert!(calculate_process_priority("python", &["python".into()]) > 
+                calculate_process_priority("sleep", &["sleep".into(), "10".into()]));
     }
 }
