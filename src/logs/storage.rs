@@ -457,7 +457,7 @@ impl LogStorage {
         let status_str = serde_json::to_string(&status)?;
         let status_str = status_str.trim_matches('"');
         
-        if status == ProcessStatus::Stopped || status == ProcessStatus::Failed || status == ProcessStatus::Killed {
+        if status == ProcessStatus::Stopped || status == ProcessStatus::Failed || status == ProcessStatus::Tombstoned {
             sqlx::query(r#"
                 UPDATE processes 
                 SET status = ?, session_pid = ?, stopped_at = ?, updated_at = CURRENT_TIMESTAMP 
@@ -605,7 +605,7 @@ impl LogStorage {
         keep_logs: bool,
     ) -> Result<Vec<(ProcessId, String)>> {
         // Build the query based on parameters
-        let mut query = String::from("SELECT id, name FROM processes WHERE status = 'Stopped'");
+        let mut query = String::from("SELECT id, name FROM processes WHERE status IN ('Stopped', 'Tombstoned')");
         let mut bindings = vec![];
         
         // Add time filter if specified

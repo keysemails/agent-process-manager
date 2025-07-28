@@ -673,7 +673,7 @@ impl McpServerHandler {
                     "success": true,
                     "cleaned": count,
                     "processes": names,
-                    "message": format!("Cleaned {} stopped processes", count)
+                    "message": format!("Cleaned {} stopped/tombstoned processes", count)
                 });
                 Self::create_success_result(response.to_string())
             }
@@ -1518,7 +1518,7 @@ Common search patterns:
             },
             Tool {
                 name: Cow::Borrowed("clean"),
-                description: Some(Cow::Borrowed("Clean stopped processes")),
+                description: Some(Cow::Borrowed("Clean stopped and tombstoned processes")),
                 input_schema: Arc::new(serde_json::from_value(json!({
                     "type": "object",
                     "properties": {

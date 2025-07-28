@@ -124,7 +124,7 @@ enum Commands {
         force: bool,
     },
     
-    /// Clean up stopped processes
+    /// Clean up stopped and tombstoned processes
     Clean {
         /// Remove stopped processes older than specified hours (e.g., 24 for 1 day)
         #[arg(long)]
@@ -695,7 +695,7 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
 
     // Perform auto-cleanup if enabled
     if config.cleanup.auto_clean_on_startup {
-        info!("Performing auto-cleanup of stopped processes...");
+        info!("Performing auto-cleanup of stopped and tombstoned processes...");
         
         let retention_hours = if config.cleanup.retention_hours > 0 {
             Some(config.cleanup.retention_hours)
@@ -710,9 +710,9 @@ async fn start_daemon(config_path: Option<String>) -> anyhow::Result<()> {
         ).await {
             Ok(cleaned) => {
                 if cleaned.is_empty() {
-                    info!("No stopped processes to clean up");
+                    info!("No stopped or tombstoned processes to clean up");
                 } else {
-                    info!("Cleaned up {} stopped processes:", cleaned.len());
+                    info!("Cleaned up {} stopped/tombstoned processes:", cleaned.len());
                     for (id, name) in &cleaned {
                         info!("  - {} ({})", name, id);
                     }
@@ -1775,8 +1775,9 @@ async fn clean_stopped_processes_cli(
     let mut processes_to_clean = Vec::new();
     if let Some(processes) = data["data"].as_array() {
         for process in processes {
-            // Only stopped processes
-            if process["status"].as_str() != Some("Stopped") {
+            // Only stopped and tombstoned processes
+            let status = process["status"].as_str();
+            if status != Some("Stopped") && status != Some("Tombstoned") {
                 continue;
             }
             
@@ -1816,7 +1817,7 @@ async fn clean_stopped_processes_cli(
     }
     
     // Show what will be cleaned
-    println!("Will clean {} stopped processes:", processes_to_clean.len());
+    println!("Will clean {} stopped/tombstoned processes:", processes_to_clean.len());
     for (_, name, stopped_at) in &processes_to_clean {
         println!("  - {} (stopped at: {})", name, stopped_at);
     }
@@ -1864,8 +1865,8 @@ async fn clean_stopped_processes_cli(
         
     if response.status().is_success() {
         let result: serde_json::Value = response.json().await?;
-        if let Some(count) = result["cleaned"].as_u64() {
-            println!("\nCleaned {} stopped processes", count);
+        if let Some(count) = result["data"]["cleaned"].as_u64() {
+            println!("\nCleaned {} stopped/tombstoned processes", count);
         }
     } else {
         eprintln!("Failed to clean processes: {}", response.text().await?);

@@ -137,7 +137,7 @@ impl ProcessManager {
                     }
                     ProcessExitEvent::ProcessKilled { process_id, pid, signal } => {
                         info!("Process {} (PID {}) killed by signal {}", process_id, pid, signal);
-                        if let Err(e) = exit_storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await {
+                        if let Err(e) = exit_storage.update_process_status(&process_id, ProcessStatus::Tombstoned, None).await {
                             error!("Failed to update process status for killed process {}: {}", process_id, e);
                         }
                     }
@@ -656,7 +656,7 @@ impl ProcessManager {
                                 _ => {
                                     // Session was killed or terminated abnormally
                                     info!("Process {} was killed or terminated abnormally", process_id);
-                                    let _ = storage.update_process_status(&process_id, ProcessStatus::Killed, None).await;
+                                    let _ = storage.update_process_status(&process_id, ProcessStatus::Tombstoned, None).await;
                                 }
                             }
                         }
@@ -915,8 +915,8 @@ impl ProcessManager {
             let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
         }
 
-        // Update status to killed (not stopped, since we forcefully killed it)
-        self.storage.update_process_status(id, ProcessStatus::Killed, process_record.session_pid).await?;
+        // Update status to tombstoned (not stopped, since we forcefully killed it)
+        self.storage.update_process_status(id, ProcessStatus::Tombstoned, process_record.session_pid).await?;
         
         // Remove from health monitor
         self.health_monitor.remove_process(id).await;

@@ -59,7 +59,7 @@ pub enum ProcessStatus {
     Running,
     Stopping,
     Stopped,  // Process exited naturally (with exit code)
-    Killed,   // Process/session was forcefully terminated
+    Tombstoned,   // Process/session was forcefully terminated (logs remain)
     Failed,
     Restarting,
 }
