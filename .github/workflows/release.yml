@@ -68,6 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write  # Need this to push to ghcr.io
     steps:
       - uses: actions/checkout@v4
       
@@ -87,19 +88,27 @@ jobs:
             
             ## Installation
             
-            ### Linux x64
+            ### Docker (Recommended for use in other containers)
+            ```dockerfile
+            # In your Dockerfile
+            COPY --from=ghcr.io/sunnya97/apm:${{ github.event.inputs.tag || github.ref_name }} /usr/local/bin/apm /usr/local/bin/apm
+            ```
+            
+            ### Direct Download (Requires GitHub authentication for private repo)
+            
+            #### Linux x64
             ```bash
             curl -sSL https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.tag || github.ref_name }}/apm-linux-x64 -o /usr/local/bin/apm
             chmod +x /usr/local/bin/apm
             ```
             
-            ### macOS x64
+            #### macOS x64
             ```bash
             curl -sSL https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.tag || github.ref_name }}/apm-macos-x64 -o /usr/local/bin/apm
             chmod +x /usr/local/bin/apm
             ```
             
-            ### macOS ARM64
+            #### macOS ARM64
             ```bash
             curl -sSL https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.tag || github.ref_name }}/apm-macos-arm64 -o /usr/local/bin/apm
             chmod +x /usr/local/bin/apm
@@ -136,3 +145,44 @@ jobs:
           asset_path: ./apm-macos-arm64/apm-macos-arm64
           asset_name: apm-macos-arm64
           asset_content_type: application/octet-stream
+
+  docker-release:
+    needs: [build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: apm-linux-x64
+          
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.release
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/apm:${{ steps.version.outputs.VERSION }}
+            ghcr.io/${{ github.repository_owner }}/apm:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Agent Process Manager (APM) - Binary Release
+            org.opencontainers.image.licenses=MIT

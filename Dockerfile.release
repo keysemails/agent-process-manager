@@ -1,0 +1,24 @@
+# Minimal Docker image containing only the APM binary
+# This image is pushed to ghcr.io as a public package
+# Other projects can copy the binary using: COPY --from=ghcr.io/sunnya97/apm:TAG /usr/local/bin/apm /usr/local/bin/apm
+
+FROM ubuntu:22.04 AS runtime
+
+# Copy the pre-built binary (must be in build context)
+# The release workflow downloads the binary before building this image
+COPY apm-linux-x64 /usr/local/bin/apm
+
+# Ensure the binary is executable
+RUN chmod +x /usr/local/bin/apm
+
+# Add a non-root user for security
+RUN useradd -m -s /bin/bash apm
+
+# Switch to non-root user
+USER apm
+
+# Set the entrypoint to apm
+ENTRYPOINT ["/usr/local/bin/apm"]
+
+# Default command shows help
+CMD ["--help"]

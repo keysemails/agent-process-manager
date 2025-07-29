@@ -46,18 +46,23 @@ git push origin v0.3.1
 This will trigger the GitHub Actions workflow that:
 - Builds binaries for Linux x64, macOS x64, and macOS ARM64
 - Creates a GitHub release with the binaries attached
+- Builds and pushes a Docker image to `ghcr.io/sunnya97/apm:TAG`
 - Generates installation instructions
 
 ### 5. Verify Release
 
 1. Check the [Actions tab](https://github.com/sunnya97/agent-process-manager/actions) to ensure the workflow succeeded
 2. Visit the [Releases page](https://github.com/sunnya97/agent-process-manager/releases) to verify the release was created
-3. Test downloading and running a binary:
+3. Verify the Docker image was published:
    ```bash
-   curl -sSL https://github.com/sunnya97/agent-process-manager/releases/download/v0.3.1/apm-linux-x64 -o apm
-   chmod +x apm
-   ./apm --version
+   docker pull ghcr.io/sunnya97/apm:v0.3.1
+   docker run --rm ghcr.io/sunnya97/apm:v0.3.1 --version
    ```
+4. Make the Docker package public (one-time setup):
+   - Go to https://github.com/sunnya97/agent-process-manager/pkgs/container/apm
+   - Click "Package settings" 
+   - Change visibility to "Public"
+   - This allows other projects to pull the image without authentication
 
 ## Version Numbering
 
@@ -72,6 +77,20 @@ For alpha/beta releases, use tags like:
 - `v0.4.0-alpha.1`
 - `v0.4.0-beta.1`
 - `v0.4.0-rc.1`
+
+## Using APM in Docker Containers
+
+Since APM is in a private repository, the recommended way to use it in other Docker containers is via the public Docker image:
+
+```dockerfile
+# In your Dockerfile
+COPY --from=ghcr.io/sunnya97/apm:v0.3.1 /usr/local/bin/apm /usr/local/bin/apm
+```
+
+Or use `latest` tag for the most recent version:
+```dockerfile
+COPY --from=ghcr.io/sunnya97/apm:latest /usr/local/bin/apm /usr/local/bin/apm
+```
 
 ## Dependency on MCP Crate
 
