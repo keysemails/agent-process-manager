@@ -161,6 +161,10 @@ name = "process_supervisor_test"
 path = "tests/integration/rust/process_supervisor_test.rs"
 
 [[test]]
+name = "tombstoned_test"
+path = "tests/integration/rust/tombstoned_test.rs"
+
+[[test]]
 name = "search_test"
 path = "tests/integration/rust/search_test.rs"
 

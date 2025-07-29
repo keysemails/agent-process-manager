@@ -17,7 +17,7 @@ async fn test_pty_master_access() {
     
     let log_storage = Arc::new(LogStorage::new(&db_url).await.unwrap());
     let (log_tx, _log_rx) = tokio::sync::mpsc::channel(100);
-    let manager = ProcessManager::new(log_storage.clone().unwrap(), log_tx);
+    let manager = ProcessManager::new(log_storage.clone(), log_tx).unwrap();
     
     // Create a process with PTY
     let config = ProcessConfig {
@@ -43,7 +43,7 @@ async fn test_pty_master_access() {
     assert!(tmux_session.unwrap().starts_with("apm-"), "Session name should start with 'apm-'");
     
     // Clean up
-    let _ = manager.stop_process(&info.id).await;
+    let _ = manager.kill_process(&info.id).await;
 }
 
 #[tokio::test]
@@ -79,7 +79,7 @@ async fn test_process_without_pty() {
     assert!(tmux_session.is_some(), "Process should have tmux session");
     
     // Clean up
-    let _ = manager.stop_process(&info.id).await;
+    let _ = manager.kill_process(&info.id).await;
 }
 
 #[tokio::test]
@@ -130,5 +130,5 @@ async fn test_pty_resize() {
     }
     
     // Clean up
-    let _ = manager.stop_process(&info.id).await;
+    let _ = manager.kill_process(&info.id).await;
 }

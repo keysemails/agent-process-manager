@@ -199,7 +199,7 @@ async fn test_process_filtering_by_tags() {
 
 #[tokio::test]
 async fn test_tag_persistence() {
-    let (manager, _storage, _temp_dir) = setup_test_manager().await;
+    let (manager, storage, _temp_dir) = setup_test_manager().await;
     
     // Create a process with tags
     let config = ProcessConfig {

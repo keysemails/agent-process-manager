@@ -697,8 +697,23 @@ impl ProcessManager {
                                     info!("Process {} completed (pane is idle)", process_id);
                                     process_exit_detected = true;
                                     
-                                    // Mark as stopped - assume success for short commands
-                                    let _ = storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await;
+                                    // Try to get exit status from tmux
+                                    match TmuxManager::get_pane_exit_status(&session) {
+                                        Ok(Some(exit_code)) => {
+                                            info!("Short-lived process {} exited with code {}", process_id, exit_code);
+                                            let final_status = if exit_code == 0 {
+                                                ProcessStatus::Stopped
+                                            } else {
+                                                ProcessStatus::Failed
+                                            };
+                                            let _ = storage.update_process_status(&process_id, final_status, None).await;
+                                        }
+                                        _ => {
+                                            // Can't determine exit code, assume success
+                                            info!("Process {} completed but exit code unavailable", process_id);
+                                            let _ = storage.update_process_status(&process_id, ProcessStatus::Stopped, None).await;
+                                        }
+                                    }
                                 }
                             }
                         }

@@ -86,7 +86,7 @@ async fn test_log_summary_with_real_data() {
     assert!(summary.key_events.len() > 0, "Should have key events");
     
     // Stop the process
-    let _ = process_manager.stop_process(&process_id).await;
+    let _ = process_manager.kill_process(&process_id).await;
 }
 
 #[tokio::test]
@@ -142,7 +142,7 @@ async fn test_error_pattern_detection() {
     assert!(summary.error_patterns.len() > 0, "Should have error patterns");
     
     // Stop the process
-    let _ = process_manager.stop_process(&process_id).await;
+    let _ = process_manager.kill_process(&process_id).await;
 }
 
 #[tokio::test]
@@ -203,5 +203,5 @@ async fn test_enhanced_api_with_summarizer() {
     assert!(json["data"]["data"]["errors"]["total_count"].as_u64().unwrap() > 0);
     
     // Stop the process
-    let _ = process_manager.stop_process(&process_id).await;
+    let _ = process_manager.kill_process(&process_id).await;
 }

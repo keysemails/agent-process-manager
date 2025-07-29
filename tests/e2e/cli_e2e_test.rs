@@ -181,26 +181,42 @@ async fn test_tag_management_commands() {
     // Wait for daemon to start
     sleep(Duration::from_secs(2)).await;
     
+    // Clean up any leftover processes
+    let _ = apm_cmd().args(&["kill-all", "--force"]).output();
+    let _ = apm_cmd().args(&["clean", "--force"]).output();
+    sleep(Duration::from_millis(500)).await;
+    
+    // Use a unique process name to avoid conflicts
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let process_name = format!("test-tag-process-{}", timestamp);
+    
     // Spawn a process with initial tag
     let _ = apm_cmd()
-        .args(&["spawn", "test-process", "echo", "test", "--tag", "initial"])
+        .args(&["spawn", &process_name, "echo", "test", "--tag", "initial"])
         .output();
     
     sleep(Duration::from_millis(500)).await;
     
     // Add a tag
     let add_output = apm_cmd()
-        .args(&["tag", "add", "test-process", "new-tag"])
+        .args(&["tag", "add", &process_name, "new-tag"])
         .output()
         .expect("Failed to add tag");
     
+    if !add_output.status.success() {
+        eprintln!("Tag add failed. stdout: {}", String::from_utf8_lossy(&add_output.stdout));
+        eprintln!("stderr: {}", String::from_utf8_lossy(&add_output.stderr));
+    }
     assert!(add_output.status.success());
     let output_str = String::from_utf8_lossy(&add_output.stdout);
     assert!(output_str.contains("Added tag"));
     
     // List tags for process
     let list_output = apm_cmd()
-        .args(&["tag", "list", "test-process"])
+        .args(&["tag", "list", &process_name])
         .output()
         .expect("Failed to list tags");
     
@@ -210,7 +226,7 @@ async fn test_tag_management_commands() {
     
     // Remove a tag
     let remove_output = apm_cmd()
-        .args(&["tag", "remove", "test-process", "initial"])
+        .args(&["tag", "remove", &process_name, "initial"])
         .output()
         .expect("Failed to remove tag");
     
@@ -220,7 +236,7 @@ async fn test_tag_management_commands() {
     
     // Verify tag was removed
     let list_output = apm_cmd()
-        .args(&["tag", "list", "test-process"])
+        .args(&["tag", "list", &process_name])
         .output()
         .expect("Failed to list tags");
     
@@ -239,7 +255,7 @@ async fn test_tag_management_commands() {
     
     // Clean up
     let _ = apm_cmd()
-        .args(&["kill", "test-process"])
+        .args(&["kill", &process_name])
         .output();
     
     daemon.kill().expect("Failed to kill daemon");
@@ -324,7 +340,7 @@ async fn test_view_logs() {
 
 #[tokio::test]
 #[serial]
-async fn test_stop_process() {
+async fn test_kill_process() {
     kill_daemon();
     
     let mut daemon = apm_cmd()
@@ -354,15 +370,15 @@ async fn test_stop_process() {
     assert!(list_str.contains("test-sleep"));
     assert!(list_str.contains("running") || list_str.contains("Running"));
     
-    // Stop the process
-    let stop_output = apm_cmd()
-        .args(&["stop", "test-sleep"])
+    // Kill the process
+    let kill_output = apm_cmd()
+        .args(&["kill", "test-sleep"])
         .output()
-        .expect("Failed to stop process");
+        .expect("Failed to kill process");
     
-    assert!(stop_output.status.success());
-    let stop_str = String::from_utf8_lossy(&stop_output.stdout);
-    assert!(stop_str.contains("Stopped") || stop_str.contains("stopped"));
+    assert!(kill_output.status.success());
+    let kill_str = String::from_utf8_lossy(&kill_output.stdout);
+    assert!(kill_str.contains("Killed") || kill_str.contains("killed") || kill_str.contains("terminated"));
     
     daemon.kill().expect("Failed to kill daemon");
 }
@@ -457,14 +473,14 @@ async fn test_invalid_commands() {
     
     sleep(Duration::from_secs(2)).await;
     
-    // Try to stop non-existent process
-    let stop_output = apm_cmd()
-        .args(&["stop", "non-existent"])
+    // Try to kill non-existent process
+    let kill_output = apm_cmd()
+        .args(&["kill", "non-existent"])
         .output()
-        .expect("Failed to run stop command");
+        .expect("Failed to run kill command");
     
-    assert!(!stop_output.status.success());
-    let error_str = String::from_utf8_lossy(&stop_output.stderr);
+    assert!(!kill_output.status.success());
+    let error_str = String::from_utf8_lossy(&kill_output.stderr);
     assert!(error_str.contains("not found") || error_str.contains("Not found"));
     
     // Try to get logs for non-existent process
