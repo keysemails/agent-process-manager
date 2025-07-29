@@ -145,20 +145,8 @@ jobs:
           asset_path: ./apm-macos-arm64/apm-macos-arm64
           asset_name: apm-macos-arm64
           asset_content_type: application/octet-stream
-
-  docker-release:
-    needs: [build-linux]
-    runs-on: ubuntu-latest
-    permissions:
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Download Linux artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: apm-linux-x64
           
+      # Docker image publishing
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         
@@ -169,10 +157,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
           
-      - name: Extract version
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -180,7 +164,7 @@ jobs:
           file: ./Dockerfile.release
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/apm:${{ steps.version.outputs.VERSION }}
+            ghcr.io/${{ github.repository_owner }}/apm:${{ github.event.inputs.tag || github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/apm:latest
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
