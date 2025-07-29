@@ -5,6 +5,19 @@ All notable changes to Agent Process Manager (APM) will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2025-07-19
+
+### Added
+- GitHub Actions release workflow improvements
+- Release documentation and tooling (RELEASING.md, CHANGELOG.md, install.sh)
+- Update script for Vibe Docker integration
+
+### Fixed
+- Tombstoned status for killed processes
+- Process exit detection with tmux pane status
+- Test suite compatibility with tombstoned status changes
+- GitHub Actions workflow to use non-deprecated artifact actions
+
 ## [0.3.0] - 2025-07-19
 
 ### Added
@@ -51,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI interface
 - WebSocket support for real-time logs
 
+[0.3.1]: https://github.com/sunnya97/agent-process-manager/releases/tag/v0.3.1
 [0.3.0]: https://github.com/sunnya97/agent-process-manager/releases/tag/v0.3.0
 [0.2.0-alpha.1]: https://github.com/sunnya97/agent-process-manager/releases/tag/v0.2.0-alpha.1
 [0.1.0]: https://github.com/sunnya97/agent-process-manager/releases/tag/v0.1.0
