@@ -5,6 +5,16 @@ All notable changes to Agent Process Manager (APM) will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2025-07-30
+
+### Fixed
+- Linux binaries now built in Debian 12 (bookworm) container for GLIBC 2.36 compatibility
+- Resolves runtime errors when using APM in Node:20 or Debian 12 based containers
+
+### Changed
+- Release workflow uses rust:1-bookworm container for Linux builds
+- Updated documentation to explain GLIBC compatibility requirements
+
 ## [0.3.3] - 2025-07-19
 
 ### Fixed

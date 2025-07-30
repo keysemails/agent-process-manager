@@ -1,6 +1,6 @@
 [package]
 name = "agent-process-manager"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 authors = ["APM Contributors"]
 description = "An AI-native process manager for efficient agent-process interaction"
