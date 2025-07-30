@@ -952,6 +952,51 @@ gh issue create --template feature_request.yml
 gh issue edit 123 --add-assignee @me
 ```
 
+## Release Process
+
+### Creating a New Release
+
+APM uses GitHub releases with Docker image distribution for public binary access:
+
+1. **Update version** in `Cargo.toml`
+2. **Update CHANGELOG.md** with changes
+3. **Commit and push** changes
+4. **Create and push tag**:
+   ```bash
+   git tag -a v0.3.4 -m "Release v0.3.4 - Brief description"
+   git push origin v0.3.4
+   ```
+
+This triggers the release workflow which:
+- Builds binaries for Linux x64, macOS x64, and macOS ARM64
+- Creates a GitHub release with binaries attached
+- Builds and pushes Docker image to `ghcr.io/sunnya97/apm:TAG`
+
+### Docker Image Distribution
+
+Since APM's repository is private, binaries are distributed via public Docker images:
+- **Image location**: `ghcr.io/sunnya97/apm:VERSION`
+- **Latest tag**: `ghcr.io/sunnya97/apm:latest`
+- **First-time setup**: Make the package public at https://github.com/sunnya97/agent-process-manager/pkgs/container/apm
+
+### Using APM in Other Projects
+
+Projects can copy the APM binary from the public Docker image:
+```dockerfile
+# In Dockerfile
+COPY --from=ghcr.io/sunnya97/apm:v0.3.4 /usr/local/bin/apm /usr/local/bin/apm
+```
+
+### Vibe Integration
+
+When releasing a new APM version for Vibe:
+```bash
+# After APM release is complete
+cd vibe/backend/machine-image
+./update-apm-version.sh v0.3.4
+./deploy-simple.sh
+```
+
 ## Future Development
 
 Current development priorities are tracked in GitHub Issues. Key areas include:

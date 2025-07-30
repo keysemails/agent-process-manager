@@ -147,3 +147,16 @@ If automatic releases fail, you can create a release manually:
 - Check the MCP dependency is accessible
 - Ensure all tests pass locally: `cargo test`
 - Review the GitHub Actions logs for specific errors
+
+### Docker Image Issues
+- **Package not found**: Ensure the workflow completed successfully
+- **Unauthorized error**: Package needs to be made public (one-time setup)
+- **Platform mismatch**: APM images are Linux x64 only, use `--platform linux/amd64` when building
+- **Slow builds**: Rust release builds can take 5-10 minutes per platform
+
+### Making Docker Package Public (First Time Only)
+1. Wait for first release workflow to complete
+2. Go to https://github.com/sunnya97/agent-process-manager/pkgs/container/apm
+3. Click "Package settings" on the right
+4. In "Danger Zone", change visibility to "Public"
+5. All future releases will automatically be public
