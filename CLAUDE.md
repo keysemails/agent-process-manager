@@ -969,6 +969,7 @@ APM uses GitHub releases with Docker image distribution for public binary access
 
 This triggers the release workflow which:
 - Builds binaries for Linux x64, macOS x64, and macOS ARM64
+  - Linux binaries are built in Debian 12 container for GLIBC 2.36 compatibility
 - Creates a GitHub release with binaries attached
 - Builds and pushes Docker image to `ghcr.io/sunnya97/apm:TAG`
 

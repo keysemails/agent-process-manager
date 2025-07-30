@@ -153,6 +153,7 @@ If automatic releases fail, you can create a release manually:
 - **Unauthorized error**: Package needs to be made public (one-time setup)
 - **Platform mismatch**: APM images are Linux x64 only, use `--platform linux/amd64` when building
 - **Slow builds**: Rust release builds can take 5-10 minutes per platform
+- **GLIBC compatibility**: Linux binaries are built in Debian 12 (bookworm) container to ensure compatibility with Node:20 base images (GLIBC 2.36)
 
 ### Making Docker Package Public (First Time Only)
 1. Wait for first release workflow to complete
