@@ -38,6 +38,7 @@ pub mod test_utils {
             memory_mb: Some(0),
             access_group: None,
             cwd: None,
+            tmux_session: None,
             detected_ports: vec![],
         }
     }

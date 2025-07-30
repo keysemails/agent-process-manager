@@ -248,6 +248,13 @@ impl ProcessManager {
             (None, None)
         };
         
+        // Determine tmux session name if using tmux
+        let tmux_session = if config.use_tmux && TmuxManager::is_available() {
+            Some(format!("apm-{}", id.0))
+        } else {
+            None
+        };
+
         let info = ProcessInfo {
             id: id.clone(),
             name: process.config.name.clone(),
@@ -265,14 +272,8 @@ impl ProcessManager {
             memory_mb,
             access_group: process.config.access_group.clone(),
             cwd: process.config.cwd.clone(),
+            tmux_session: tmux_session.clone(),
             detected_ports: vec![], // Will be populated as logs are processed
-        };
-
-        // Store process in database
-        let tmux_session = if config.use_tmux && TmuxManager::is_available() {
-            Some(format!("apm-{}", id.0))
-        } else {
-            None
         };
         
         self.storage.store_process(
@@ -798,6 +799,7 @@ impl ProcessManager {
             memory_mb,
             access_group: process_record.config.access_group.clone(),
             cwd: process_record.config.cwd.clone(),
+            tmux_session: process_record.tmux_session.clone(),
             detected_ports,
         })
     }
@@ -858,6 +860,7 @@ impl ProcessManager {
                 memory_mb,
                 access_group: proc.config.access_group.clone(),
                 cwd: proc.config.cwd.clone(),
+                tmux_session: proc.tmux_session.clone(),
                 detected_ports,
             });
         }
@@ -1019,11 +1022,9 @@ impl ProcessManager {
             memory_mb,
             access_group: config.access_group.clone(),
             cwd: config.cwd.clone(),
+            tmux_session: tmux_session.clone(),
             detected_ports: vec![], // Will be populated as logs are processed
         };
-
-        // Extract tmux session before moving process
-        let tmux_session = process.tmux_session.clone();
         
         // Start monitoring the process output
         self.monitor_process_output(id.clone(), process).await;

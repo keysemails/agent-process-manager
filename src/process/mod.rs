@@ -49,6 +49,8 @@ pub struct ProcessInfo {
     pub access_group: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<std::path::PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tmux_session: Option<String>,
     #[serde(default)]
     pub detected_ports: Vec<u16>,
 }

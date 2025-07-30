@@ -5,6 +5,12 @@ All notable changes to Agent Process Manager (APM) will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2025-07-30
+
+### Added
+- `tmux_session` field to ProcessInfo struct, exposing the underlying tmux session name for processes using tmux
+- This enables external tools to interact directly with tmux sessions when needed
+
 ## [0.3.4] - 2025-07-30
 
 ### Fixed
